@@ -238,7 +238,7 @@ class MarketCorporateAction(Base):
         Index("ix_market_corp_action_inst_exdate", "instrument_id", "ex_date"),
         Index("ix_market_corp_action_type", "action_type"),
         CheckConstraint(
-            "action_type IN ('DIVIDEND','SPLIT','BONUS','RIGHTS','MERGER','DEMERGER')",
+            "action_type IN ('DIVIDEND','SPLIT','BONUS','RIGHTS','MERGER','DEMERGER','DELISTING')",
             name="market_corp_action_type_allowed",
         ),
     )

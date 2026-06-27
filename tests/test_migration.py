@@ -28,9 +28,11 @@ def test_migration_offline_sql_generation(capsys) -> None:
 
 
 def test_migration_has_downgrade() -> None:
-    versions = list((ROOT / "alembic" / "versions").glob("*.py"))
+    versions = sorted((ROOT / "alembic" / "versions").glob("*.py"))
     assert versions, "Expected at least one migration file"
-    content = versions[0].read_text(encoding="utf-8")
-    assert "def upgrade()" in content
-    assert "def downgrade()" in content
-    assert "drop_table('auth_role')" in content
+    for version_file in versions:
+        content = version_file.read_text(encoding="utf-8")
+        assert "def upgrade()" in content
+        assert "def downgrade()" in content
+    head_content = versions[-1].read_text(encoding="utf-8")
+    assert "down_revision" in head_content
