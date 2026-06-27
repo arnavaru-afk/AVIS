@@ -1,0 +1,14 @@
+{
+  "name": "nse_eod",
+  "fields": [
+    {"name": "symbol", "type": "string", "nullable": false},
+    {"name": "series", "type": "string", "nullable": false},
+    {"name": "open", "type": "decimal", "nullable": false},
+    {"name": "high", "type": "decimal", "nullable": false},
+    {"name": "low", "type": "decimal", "nullable": false},
+    {"name": "close", "type": "decimal", "nullable": false},
+    {"name": "volume", "type": "decimal", "nullable": false},
+    {"name": "delivery_qty", "type": "decimal", "nullable": true},
+    {"name": "timestamp", "type": "date", "nullable": false}
+  ]
+}
