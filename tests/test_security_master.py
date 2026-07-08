@@ -270,6 +270,43 @@ def test_post_merger_symbol_lookup_is_point_in_time_correct(session: Session) ->
         resolver.resolve_as_of("OLDCO", "NSE", date(2024, 4, 15))
 
 
+def test_alias_transition_boundary_is_exact_at_cutover(session: Session) -> None:
+    _seed_exchange(session, 1, "NSE")
+    company = _seed_company(
+        session,
+        company_id=6,
+        company_uuid=uuid.uuid4(),
+        display_name="Boundary Co",
+        isin="INE666B01010",
+    )
+    _seed_instrument(session, 601, company.company_id, 1, "NEWBN")
+
+    registry = AliasRegistryService(session)
+    registry.create_alias(
+        AliasMutation(
+            instrument_id=601,
+            source_system="NSE",
+            alias_symbol="OLDBN",
+            valid_from=date(2024, 1, 1),
+            valid_to=date(2024, 3, 31),
+        )
+    )
+    registry.create_alias(
+        AliasMutation(
+            instrument_id=601,
+            source_system="NSE",
+            alias_symbol="NEWBN",
+            valid_from=date(2024, 4, 1),
+        )
+    )
+
+    resolver = CanonicalIdentityResolver(session)
+    assert resolver.resolve_as_of("OLDBN", "NSE", date(2024, 3, 31)) == 601
+    with pytest.raises(EntityNotFoundError):
+        resolver.resolve_as_of("OLDBN", "NSE", date(2024, 4, 1))
+    assert resolver.resolve_as_of("NEWBN", "NSE", date(2024, 4, 1)) == 601
+
+
 def _seed_itc(session: Session) -> uuid.UUID:
     _seed_exchange(session, 1, "NSE")
     company_uuid = uuid.uuid4()

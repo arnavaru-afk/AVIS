@@ -13,6 +13,7 @@ from apps.api.config import Settings, get_settings
 from apps.api.middleware import AuthMiddleware, ComplianceMiddleware, RequestLoggingMiddleware
 from apps.api.middleware.compliance import DEFAULT_SOURCE_POLICIES
 from apps.api.routers import instruments, market, pipeline, quality, valuations
+from apps.api.services import ValuationJobQueue
 
 
 def create_app(*, settings: Settings | None = None) -> FastAPI:
@@ -26,11 +27,19 @@ def create_app(*, settings: Settings | None = None) -> FastAPI:
             engine_kwargs.update({"pool_size": 2, "max_overflow": 8})
         engine = create_async_engine(resolved_settings.async_database_url, **engine_kwargs)
         session_factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+        valuation_job_queue = ValuationJobQueue(
+            session_factory=session_factory,
+            process_fn=valuations.process_queued_valuation_run_sync,
+            recover_fn=valuations.recover_queued_valuation_run_ids_sync,
+        )
         app.state.settings = resolved_settings
         app.state.engine = engine
         app.state.session_factory = session_factory
         app.state.source_policies = DEFAULT_SOURCE_POLICIES
+        app.state.valuation_job_queue = valuation_job_queue
+        await valuation_job_queue.start()
         yield
+        await valuation_job_queue.stop()
         await engine.dispose()
 
     app = FastAPI(title="AVIS API", version="1.0", lifespan=lifespan)

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import uuid
 from datetime import UTC, date, datetime, timezone
 from decimal import Decimal
 from typing import Any
@@ -30,6 +32,7 @@ from apps.api.schemas.valuations import (
     ValueBridgeEntry,
 )
 from avis.core.valuation_engine import (
+    AssumptionSetManager,
     ConfidenceScoringEngine,
     DcfAssumptions,
     DcfEngine,
@@ -41,11 +44,9 @@ from avis.core.valuation_engine import (
 )
 from avis.db.models import (
     DqIncident,
-    DqResult,
     FundMetricFact,
     FundStatementFact,
     RefCompany,
-    RefExchange,
     RefInstrument,
     ValAssumptionSet,
     ValAttribution,
@@ -56,12 +57,12 @@ from avis.db.models import (
 )
 
 router = APIRouter(prefix="/valuations", tags=["valuations"])
+logger = logging.getLogger("avis.api.valuations")
 
 REVENUE_FACT_CODE = "Revenue"
 RUN_LABEL_KEY = "RUN_LABEL"
-DA_SCHEDULE_KEY = "DCF_DA_SCHEDULE"
-CAPEX_SCHEDULE_KEY = "DCF_CAPEX_SCHEDULE"
-NWC_SCHEDULE_KEY = "DCF_NWC_DELTA_SCHEDULE"
+JOB_PAYLOAD_KEY = "JOB_PAYLOAD"
+JOB_FAILURE_KEY = "JOB_FAILURE"
 METRIC_CODES = {
     "tax_rate": "TAX_RATE",
     "share_count": "SHARE_COUNT",
@@ -78,14 +79,22 @@ METRIC_CODES = {
 }
 
 
-@router.post("/run", response_model=ValuationRunResponse)
+@router.post("/run", response_model=ValuationRunResponse, status_code=status.HTTP_202_ACCEPTED)
 async def run_valuation(
     payload: RunValuationRequest,
+    request: Request,
     db: DbSession,
     _current_user: WriteAuthorizedUser,
 ) -> ValuationRunResponse:
-    response = await db.run_sync(lambda sync_session: _run_valuation_sync(sync_session, payload))
+    response = await db.run_sync(lambda sync_session: queue_valuation_run_sync(sync_session, payload))
     await db.commit()
+
+    valuation_job_queue = getattr(request.app.state, "valuation_job_queue", None)
+    if valuation_job_queue is not None:
+        await valuation_job_queue.enqueue(response.val_run_id)
+    else:
+        await db.run_sync(process_queued_valuation_run_sync, response.val_run_id)
+        await db.commit()
     return response
 
 
@@ -132,15 +141,26 @@ async def list_instrument_valuations(
     run_ids = [run.val_run_id for run in runs]
     outputs = await db.execute(select(ValModelOutput).where(ValModelOutput.val_run_id.in_(run_ids))) if run_ids else None
     confidence_rows = await db.execute(select(ValConfidenceSnapshot).where(ValConfidenceSnapshot.val_run_id.in_(run_ids))) if run_ids else None
-    assumption_rows = await db.execute(
-        select(ValAssumptionSet).where(ValAssumptionSet.val_run_id.in_(run_ids), ValAssumptionSet.assumption_key == RUN_LABEL_KEY)
-    ) if run_ids else None
+    assumption_rows = (
+        await db.execute(
+            select(ValAssumptionSet).where(
+                ValAssumptionSet.val_run_id.in_(run_ids),
+                ValAssumptionSet.assumption_key == RUN_LABEL_KEY,
+            )
+        )
+        if run_ids
+        else None
+    )
 
     outputs_by_run: dict[int, dict[str, ValModelOutput]] = {}
     for row in (outputs.scalars().all() if outputs is not None else []):
         outputs_by_run.setdefault(row.val_run_id, {})[row.model_name] = row
-    confidence_by_run = {row.val_run_id: row for row in (confidence_rows.scalars().all() if confidence_rows is not None else [])}
-    labels_by_run = {row.val_run_id: row.assumption_value_text for row in (assumption_rows.scalars().all() if assumption_rows is not None else [])}
+    confidence_by_run = {
+        row.val_run_id: row for row in (confidence_rows.scalars().all() if confidence_rows is not None else [])
+    }
+    labels_by_run = {
+        row.val_run_id: row.assumption_value_text for row in (assumption_rows.scalars().all() if assumption_rows is not None else [])
+    }
 
     items: list[ValuationListItem] = []
     for run in runs:
@@ -227,11 +247,7 @@ async def get_valuation_attribution(
 
     bridge: list[ValueBridgeEntry] = []
     if prior_run_id is not None:
-        prior_rows = (
-            await db.scalars(
-                select(ValAttribution).where(ValAttribution.val_run_id == prior_run_id)
-            )
-        ).all()
+        prior_rows = (await db.scalars(select(ValAttribution).where(ValAttribution.val_run_id == prior_run_id))).all()
         prior_map = {row.driver_key: row for row in prior_rows}
         for row in rows:
             if row.driver_key not in prior_map:
@@ -267,7 +283,10 @@ async def get_valuation_sensitivity(
     )
     rows = (await db.scalars(stmt)).all()
     if not rows:
-        raise HTTPException(status_code=404, detail={"code": "sensitivity_not_found", "message": "sensitivity not yet computed"})
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "sensitivity_not_found", "message": "sensitivity not yet computed"},
+        )
     return SensitivityResponse(val_run_id=val_run_id, rows=[SensitivityRowResponse.model_validate(row) for row in rows])
 
 
@@ -283,7 +302,7 @@ class DatabaseCompPeerMap:
         ).first()
         if target is None:
             return []
-        instrument, company = target
+        _, company = target
         if company.industry_code is None and company.sector_code is None:
             return []
         stmt = (
@@ -312,7 +331,7 @@ class DatabasePeerMetricsProvider:
         return _build_relative_peer_point(self._session, instrument_id, as_of_date=as_of_date)
 
 
-def _run_valuation_sync(session: Session, payload: RunValuationRequest) -> ValuationRunResponse:
+def queue_valuation_run_sync(session: Session, payload: RunValuationRequest) -> ValuationRunResponse:
     instrument = session.scalar(select(RefInstrument).where(RefInstrument.instrument_uuid == payload.instrument_uuid))
     if instrument is None:
         raise _not_found("instrument_not_found", "Unknown instrument_uuid")
@@ -325,74 +344,159 @@ def _run_valuation_sync(session: Session, payload: RunValuationRequest) -> Valua
         revenue_cagr=payload.assumption_set.revenue_cagr,
         ebit_margin=payload.assumption_set.ebit_margin,
     )
-    projection_input = _build_dcf_projection_input(session, instrument.instrument_id, payload)
+    projection_input = _build_dcf_projection_input(
+        session,
+        instrument.instrument_id,
+        payload,
+        as_of_date=as_of_ts.date(),
+    )
     relative_inputs = RelativeInputBundle(
         target_instrument_id=instrument.instrument_id,
         as_of_date=as_of_ts,
         target_metrics=_build_relative_peer_point(session, instrument.instrument_id, as_of_date=as_of_ts.date()),
     )
-    orchestrator = ValuationOrchestrator(
-        session=session,
-        dcf_engine=DcfEngine(),
-        relative_engine=RelativeEngine(
-            comp_peer_map=DatabaseCompPeerMap(session),
-            peer_metrics_provider=DatabasePeerMetricsProvider(session),
-        ),
-        confidence_engine=ConfidenceScoringEngine(),
-    )
-    result = orchestrator.run(
+    run = ValRun(
         instrument_id=instrument.instrument_id,
-        as_of_ts=as_of_ts,
-        dcf_assumptions=dcf_assumptions,
-        dcf_projection_input=projection_input,
-        relative_inputs=relative_inputs,
-        data_quality_score=_data_quality_score(session),
-        assumption_stability=Decimal("75.00"),
+        run_uuid=uuid.uuid4(),
+        as_of_ts=_db_datetime(as_of_ts),
+        run_type="ON_DEMAND",
+        trigger_type="API",
+        status="QUEUED",
+        pipeline_run_id=None,
+        created_at=_db_now(),
+        completed_at=None,
     )
-    _store_assumption_metadata(session, result.val_run_id, payload)
+    _assign_pk_if_sqlite(session, run, "val_run_id", ValRun)
+    session.add(run)
     session.flush()
 
-    relative_output = session.scalar(
-        select(ValModelOutput).where(
-            ValModelOutput.val_run_id == result.val_run_id,
-            ValModelOutput.model_name == "RELATIVE",
-        )
+    AssumptionSetManager(session).store_dcf_assumptions(val_run_id=run.val_run_id, assumptions=dcf_assumptions)
+    _store_assumption_metadata(
+        session,
+        val_run_id=run.val_run_id,
+        run_label=payload.run_label,
+        job_payload={
+            "instrument_id": instrument.instrument_id,
+            "as_of_ts": as_of_ts.isoformat(),
+            "dcf_projection_input": _serialize_dcf_projection_input(projection_input),
+            "relative_inputs": _serialize_relative_input_bundle(relative_inputs),
+            "data_quality_score": str(_data_quality_score(session)),
+            "assumption_stability": "75.00",
+        },
     )
-    blended_output = session.scalar(
-        select(ValModelOutput).where(
-            ValModelOutput.val_run_id == result.val_run_id,
-            ValModelOutput.model_name == "BLENDED",
-        )
-    )
+    session.flush()
     return ValuationRunResponse(
-        val_run_id=result.val_run_id,
-        blended_value=blended_output.target_price if blended_output is not None else result.blended_target_price,
-        dcf_value=result.dcf_result.intrinsic_value_per_share,
-        relative_value=relative_output.target_price if relative_output is not None else None,
-        confidence_score=result.confidence_result.composite_score,
-        override_required=result.analyst_override_required,
+        val_run_id=run.val_run_id,
+        run_uuid=run.run_uuid,
+        status=run.status,
+        queued_at=run.created_at,
+        blended_value=None,
+        dcf_value=None,
+        relative_value=None,
+        confidence_score=None,
+        override_required=None,
     )
 
 
-def _build_dcf_projection_input(session: Session, instrument_id: int, payload: RunValuationRequest) -> DcfProjectionInput:
+def recover_queued_valuation_run_ids_sync(session: Session) -> list[int]:
+    runs = list(
+        session.scalars(
+            select(ValRun)
+            .where(ValRun.status.in_(("QUEUED", "RUNNING")))
+            .order_by(ValRun.created_at.asc(), ValRun.val_run_id.asc())
+        )
+    )
+    recovered_ids: list[int] = []
+    for run in runs:
+        if run.status == "RUNNING":
+            run.status = "QUEUED"
+            run.completed_at = None
+        recovered_ids.append(run.val_run_id)
+    session.flush()
+    return recovered_ids
+
+
+def process_queued_valuation_run_sync(session: Session, val_run_id: int) -> None:
+    run = session.get(ValRun, val_run_id)
+    if run is None or run.status not in {"QUEUED", "RUNNING"}:
+        return
+
+    try:
+        metadata = _load_metadata_map(session, val_run_id)
+        job_payload = metadata.get(JOB_PAYLOAD_KEY)
+        if job_payload is None:
+            raise ValueError("Queued valuation is missing JOB_PAYLOAD metadata")
+        queued_payload = json.loads(job_payload)
+        dcf_assumptions = AssumptionSetManager(session).load_dcf_assumptions(val_run_id=val_run_id)
+        projection_input = _deserialize_dcf_projection_input(queued_payload["dcf_projection_input"])
+        relative_inputs = _deserialize_relative_input_bundle(queued_payload["relative_inputs"])
+        data_quality_score = Decimal(str(queued_payload["data_quality_score"]))
+        assumption_stability = Decimal(str(queued_payload["assumption_stability"]))
+
+        run.status = "RUNNING"
+        run.completed_at = None
+        session.flush()
+
+        orchestrator = ValuationOrchestrator(
+            session=session,
+            dcf_engine=DcfEngine(),
+            relative_engine=RelativeEngine(
+                comp_peer_map=DatabaseCompPeerMap(session),
+                peer_metrics_provider=DatabasePeerMetricsProvider(session),
+            ),
+            confidence_engine=ConfidenceScoringEngine(),
+        )
+        orchestrator.run_existing(
+            val_run_id=val_run_id,
+            instrument_id=run.instrument_id,
+            as_of_ts=datetime.fromisoformat(queued_payload["as_of_ts"]),
+            dcf_assumptions=dcf_assumptions,
+            dcf_projection_input=projection_input,
+            relative_inputs=relative_inputs,
+            data_quality_score=data_quality_score,
+            assumption_stability=assumption_stability,
+        )
+        _delete_metadata_key(session, val_run_id, JOB_FAILURE_KEY)
+    except Exception as exc:  # pragma: no cover - exercised through API failure status tests if introduced
+        logger.exception("queued valuation execution failed val_run_id=%s", val_run_id)
+        run = session.get(ValRun, val_run_id)
+        if run is not None:
+            run.status = "FAILED"
+            run.completed_at = _db_now()
+        _store_text_metadata(session, val_run_id, JOB_FAILURE_KEY, str(exc), unit="TEXT")
+        session.flush()
+
+
+def _build_dcf_projection_input(
+    session: Session,
+    instrument_id: int,
+    payload: RunValuationRequest,
+    *,
+    as_of_date: date,
+) -> DcfProjectionInput:
     forecast_years = payload.assumption_set.forecast_years
-    revenue_base = _latest_revenue(session, instrument_id)
-    tax_rate = _metric_value(session, instrument_id, METRIC_CODES["tax_rate"])
-    share_count = _metric_value(session, instrument_id, METRIC_CODES["share_count"])
-    net_debt = _metric_value(session, instrument_id, METRIC_CODES["net_debt"])
+    revenue_base = _latest_revenue(session, instrument_id, as_of_date=as_of_date)
+    tax_rate = _metric_value(session, instrument_id, METRIC_CODES["tax_rate"], as_of_date=as_of_date)
+    share_count = _metric_value(session, instrument_id, METRIC_CODES["share_count"], as_of_date=as_of_date)
+    net_debt = _metric_value(session, instrument_id, METRIC_CODES["net_debt"], as_of_date=as_of_date)
     da_schedule = _schedule_from_request_or_metric(
         payload.assumption_set.da,
-        fallback=_metric_value(session, instrument_id, METRIC_CODES["depreciation_and_amortization"]),
+        fallback=_metric_value(
+            session,
+            instrument_id,
+            METRIC_CODES["depreciation_and_amortization"],
+            as_of_date=as_of_date,
+        ),
         forecast_years=forecast_years,
     )
     capex_schedule = _schedule_from_request_or_metric(
         payload.assumption_set.capex,
-        fallback=_metric_value(session, instrument_id, METRIC_CODES["capex"]),
+        fallback=_metric_value(session, instrument_id, METRIC_CODES["capex"], as_of_date=as_of_date),
         forecast_years=forecast_years,
     )
     nwc_schedule = _schedule_from_request_or_metric(
         payload.assumption_set.nwc_delta,
-        fallback=_metric_value(session, instrument_id, METRIC_CODES["delta_nwc"]),
+        fallback=_metric_value(session, instrument_id, METRIC_CODES["delta_nwc"], as_of_date=as_of_date),
         forecast_years=forecast_years,
     )
     return DcfProjectionInput(
@@ -448,12 +552,13 @@ def _metric_value(session: Session, instrument_id: int, metric_code: str, *, as_
     return Decimal(value)
 
 
-def _latest_revenue(session: Session, instrument_id: int) -> Decimal:
+def _latest_revenue(session: Session, instrument_id: int, *, as_of_date: date) -> Decimal:
     stmt = (
         select(FundStatementFact.value)
         .where(
             FundStatementFact.instrument_id == instrument_id,
             FundStatementFact.line_item_code == REVENUE_FACT_CODE,
+            FundStatementFact.as_reported_ts <= datetime.combine(as_of_date, datetime.max.time()),
         )
         .order_by(FundStatementFact.as_reported_ts.desc(), FundStatementFact.statement_fact_id.desc())
         .limit(1)
@@ -468,36 +573,138 @@ def _latest_revenue(session: Session, instrument_id: int) -> Decimal:
 
 
 def _data_quality_score(session: Session) -> Decimal:
-    open_incidents = session.scalar(
-        select(func.count())
-        .select_from(DqIncident)
-        .where(DqIncident.incident_status.in_(("OPEN", "IN_PROGRESS")))
-    ) or 0
+    open_incidents = (
+        session.scalar(
+            select(func.count())
+            .select_from(DqIncident)
+            .where(DqIncident.incident_status.in_(("OPEN", "IN_PROGRESS")))
+        )
+        or 0
+    )
     return Decimal("20.00") if int(open_incidents) > 0 else Decimal("85.00")
 
 
-def _store_assumption_metadata(session: Session, val_run_id: int, payload: RunValuationRequest) -> None:
-    metadata_rows: list[tuple[str, str, str]] = [(RUN_LABEL_KEY, payload.run_label, "TEXT")]
-    if payload.assumption_set.da is not None:
-        metadata_rows.append((DA_SCHEDULE_KEY, json.dumps([str(value) for value in payload.assumption_set.da]), "JSON"))
-    if payload.assumption_set.capex is not None:
-        metadata_rows.append((CAPEX_SCHEDULE_KEY, json.dumps([str(value) for value in payload.assumption_set.capex]), "JSON"))
-    if payload.assumption_set.nwc_delta is not None:
-        metadata_rows.append((NWC_SCHEDULE_KEY, json.dumps([str(value) for value in payload.assumption_set.nwc_delta]), "JSON"))
+def _store_assumption_metadata(
+    session: Session,
+    *,
+    val_run_id: int,
+    run_label: str,
+    job_payload: dict[str, Any],
+) -> None:
+    _store_text_metadata(session, val_run_id, RUN_LABEL_KEY, run_label, unit="TEXT")
+    _store_text_metadata(session, val_run_id, JOB_PAYLOAD_KEY, json.dumps(job_payload, sort_keys=True), unit="JSON")
 
-    for key, text_value, unit in metadata_rows:
-        row = ValAssumptionSet(
-            val_run_id=val_run_id,
-            assumption_key=key,
-            assumption_value_numeric=None,
-            assumption_value_text=text_value,
-            assumption_unit=unit,
-            source_type="ANALYST",
-            source_reference="api.run",
-            created_at=datetime.now(UTC).replace(tzinfo=None),
+
+def _store_text_metadata(session: Session, val_run_id: int, key: str, text_value: str, *, unit: str) -> None:
+    existing = session.scalar(
+        select(ValAssumptionSet).where(
+            ValAssumptionSet.val_run_id == val_run_id,
+            ValAssumptionSet.assumption_key == key,
         )
-        _assign_pk_if_sqlite(session, row, "assumption_set_id", ValAssumptionSet)
-        session.add(row)
+    )
+    if existing is not None:
+        existing.assumption_value_text = text_value
+        existing.assumption_unit = unit
+        existing.source_type = "SYSTEM"
+        existing.source_reference = "api.job"
+        return
+    row = ValAssumptionSet(
+        val_run_id=val_run_id,
+        assumption_key=key,
+        assumption_value_numeric=None,
+        assumption_value_text=text_value,
+        assumption_unit=unit,
+        source_type="SYSTEM",
+        source_reference="api.job",
+        created_at=_db_now(),
+    )
+    _assign_pk_if_sqlite(session, row, "assumption_set_id", ValAssumptionSet)
+    session.add(row)
+
+
+def _delete_metadata_key(session: Session, val_run_id: int, key: str) -> None:
+    row = session.scalar(
+        select(ValAssumptionSet).where(
+            ValAssumptionSet.val_run_id == val_run_id,
+            ValAssumptionSet.assumption_key == key,
+        )
+    )
+    if row is not None:
+        session.delete(row)
+
+
+def _load_metadata_map(session: Session, val_run_id: int) -> dict[str, str]:
+    rows = list(
+        session.scalars(
+            select(ValAssumptionSet).where(
+                ValAssumptionSet.val_run_id == val_run_id,
+                ValAssumptionSet.assumption_value_text.is_not(None),
+            )
+        )
+    )
+    return {row.assumption_key: row.assumption_value_text or "" for row in rows}
+
+
+def _serialize_dcf_projection_input(projection_input: DcfProjectionInput) -> dict[str, Any]:
+    return {
+        "revenue_base": str(projection_input.revenue_base),
+        "tax_rate": str(projection_input.tax_rate),
+        "share_count": str(projection_input.share_count),
+        "net_debt": str(projection_input.net_debt),
+        "depreciation_and_amortization": [str(value) for value in projection_input.depreciation_and_amortization],
+        "capex": [str(value) for value in projection_input.capex],
+        "delta_nwc": [str(value) for value in projection_input.delta_nwc],
+    }
+
+
+def _deserialize_dcf_projection_input(payload: dict[str, Any]) -> DcfProjectionInput:
+    return DcfProjectionInput(
+        revenue_base=Decimal(str(payload["revenue_base"])),
+        tax_rate=Decimal(str(payload["tax_rate"])),
+        share_count=Decimal(str(payload["share_count"])),
+        net_debt=Decimal(str(payload["net_debt"])),
+        depreciation_and_amortization=tuple(Decimal(str(value)) for value in payload["depreciation_and_amortization"]),
+        capex=tuple(Decimal(str(value)) for value in payload["capex"]),
+        delta_nwc=tuple(Decimal(str(value)) for value in payload["delta_nwc"]),
+    )
+
+
+def _serialize_relative_input_bundle(relative_inputs: RelativeInputBundle) -> dict[str, Any]:
+    metrics = relative_inputs.target_metrics
+    return {
+        "target_instrument_id": relative_inputs.target_instrument_id,
+        "as_of_date": relative_inputs.as_of_date.isoformat(),
+        "target_metrics": {
+            "instrument_id": metrics.instrument_id,
+            "enterprise_value": str(metrics.enterprise_value),
+            "equity_value": str(metrics.equity_value),
+            "ebitda": str(metrics.ebitda),
+            "earnings": str(metrics.earnings),
+            "book_value": str(metrics.book_value),
+            "sales": str(metrics.sales),
+            "net_debt": str(metrics.net_debt),
+            "share_count": str(metrics.share_count),
+        },
+    }
+
+
+def _deserialize_relative_input_bundle(payload: dict[str, Any]) -> RelativeInputBundle:
+    metrics_payload = payload["target_metrics"]
+    return RelativeInputBundle(
+        target_instrument_id=int(payload["target_instrument_id"]),
+        as_of_date=datetime.fromisoformat(payload["as_of_date"]),
+        target_metrics=RelativePeerPoint(
+            instrument_id=int(metrics_payload["instrument_id"]),
+            enterprise_value=Decimal(str(metrics_payload["enterprise_value"])),
+            equity_value=Decimal(str(metrics_payload["equity_value"])),
+            ebitda=Decimal(str(metrics_payload["ebitda"])),
+            earnings=Decimal(str(metrics_payload["earnings"])),
+            book_value=Decimal(str(metrics_payload["book_value"])),
+            sales=Decimal(str(metrics_payload["sales"])),
+            net_debt=Decimal(str(metrics_payload["net_debt"])),
+            share_count=Decimal(str(metrics_payload["share_count"])),
+        ),
+    )
 
 
 def _assign_pk_if_sqlite(session: Session, instance: Any, pk_name: str, model: type[Any]) -> None:
@@ -519,6 +726,16 @@ def _assumption_row_to_schema(row: ValAssumptionSet) -> AssumptionEntryResponse:
         source_type=row.source_type,
         source_reference=row.source_reference,
     )
+
+
+def _db_now() -> datetime:
+    return datetime.now(UTC).replace(tzinfo=None)
+
+
+def _db_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(UTC).replace(tzinfo=None)
 
 
 def _not_found(code: str, message: str) -> HTTPException:

@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import date
 from decimal import Decimal
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
-from sqlalchemy import Select, distinct, select
+from sqlalchemy import Select, select
 from sqlalchemy.orm import selectinload
 
 from apps.api.dependencies import CurrentUser, DateWindow, DbSession, register_compliance_check
 from apps.api.schemas.market import PriceHistoryResponse, PriceHistoryRow
-from avis.db.models import MarketOhlcv1D, RefCompany, RefExchange, RefInstrument
+from avis.db.models import MarketOhlcv1D, RefInstrument
 
 router = APIRouter(prefix="/market", tags=["market"])
 
@@ -25,10 +25,18 @@ async def get_market_ohlcv(
     _current_user: CurrentUser,
     date_window: DateWindow,
     adjusted: bool = Query(default=True),
+    as_of_date: date | None = Query(default=None),
 ) -> PriceHistoryResponse:
     from_date, to_date = date_window
     instrument = await _load_instrument(db, instrument_uuid)
-    rows = await _fetch_price_rows(db, instrument, from_date=from_date, to_date=to_date, adjusted=adjusted)
+    rows = await _fetch_price_rows(
+        db,
+        instrument,
+        from_date=from_date,
+        to_date=to_date,
+        adjusted=adjusted,
+        as_of_date=as_of_date,
+    )
     for source_system in {row.source_system for row in rows}:
         register_compliance_check(
             request,
@@ -65,12 +73,14 @@ async def _fetch_price_rows(
     from_date: date | None,
     to_date: date | None,
     adjusted: bool,
+    as_of_date: date | None = None,
 ) -> list[PriceHistoryRow]:
     effective_from = from_date
     if instrument.listing_date is not None:
         effective_from = max(filter(None, [from_date, instrument.listing_date]), default=instrument.listing_date)
 
-    effective_to = to_date or date.today()
+    pit_as_of = as_of_date or to_date or date.today()
+    effective_to = min(filter(None, [to_date, pit_as_of]), default=pit_as_of)
     if instrument.delisting_date is not None:
         effective_to = min(effective_to, instrument.delisting_date)
 

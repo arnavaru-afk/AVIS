@@ -88,6 +88,67 @@ class ValuationOrchestrator:
             pipeline_run_id=pipeline_run_id,
         )
         self._assumption_manager.store_dcf_assumptions(val_run_id=val_run.val_run_id, assumptions=dcf_assumptions)
+        return self._execute_run(
+            val_run=val_run,
+            as_of_ts=as_of_ts,
+            dcf_assumptions=dcf_assumptions,
+            dcf_projection_input=dcf_projection_input,
+            relative_inputs=relative_inputs,
+            data_quality_score=data_quality_score,
+            assumption_stability=assumption_stability,
+            currency_code=currency_code,
+        )
+
+    def run_existing(
+        self,
+        *,
+        val_run_id: int,
+        instrument_id: int,
+        as_of_ts: datetime,
+        dcf_assumptions: DcfAssumptions,
+        dcf_projection_input: DcfProjectionInput,
+        relative_inputs: RelativeInputBundle,
+        data_quality_score: Decimal,
+        assumption_stability: Decimal,
+        currency_code: str = "INR",
+    ) -> ValuationRunResult:
+        self._ensure_instrument_exists(instrument_id)
+        val_run = self._session.get(ValRun, val_run_id)
+        if val_run is None:
+            raise ValueError(f"Unknown val_run_id={val_run_id}")
+        if val_run.instrument_id != instrument_id:
+            raise ValueError(
+                f"Run instrument mismatch for val_run_id={val_run_id}: expected {val_run.instrument_id}, received {instrument_id}"
+            )
+        val_run.as_of_ts = _db_datetime(as_of_ts)
+        return self._execute_run(
+            val_run=val_run,
+            as_of_ts=as_of_ts,
+            dcf_assumptions=dcf_assumptions,
+            dcf_projection_input=dcf_projection_input,
+            relative_inputs=relative_inputs,
+            data_quality_score=data_quality_score,
+            assumption_stability=assumption_stability,
+            currency_code=currency_code,
+        )
+
+    def _execute_run(
+        self,
+        *,
+        val_run: ValRun,
+        as_of_ts: datetime,
+        dcf_assumptions: DcfAssumptions,
+        dcf_projection_input: DcfProjectionInput,
+        relative_inputs: RelativeInputBundle,
+        data_quality_score: Decimal,
+        assumption_stability: Decimal,
+        currency_code: str,
+    ) -> ValuationRunResult:
+        val_run.status = "RUNNING"
+        val_run.completed_at = None
+        val_run.as_of_ts = _db_datetime(as_of_ts)
+        self._clear_existing_run_artifacts(val_run.val_run_id)
+        self._session.flush()
 
         dcf_result = self._dcf_engine.run(assumptions=dcf_assumptions, projection_input=dcf_projection_input)
         try:
@@ -371,6 +432,27 @@ class ValuationOrchestrator:
     def _ensure_instrument_exists(self, instrument_id: int) -> None:
         if self._session.get(RefInstrument, instrument_id) is None:
             raise ValueError(f"Unknown instrument_id={instrument_id}")
+
+    def _clear_existing_run_artifacts(self, val_run_id: int) -> None:
+        for row in list(
+            self._session.scalars(
+                select(ValModelOutput).where(ValModelOutput.val_run_id == val_run_id)
+            )
+        ):
+            self._session.delete(row)
+        for row in list(
+            self._session.scalars(
+                select(ValAttribution).where(ValAttribution.val_run_id == val_run_id)
+            )
+        ):
+            self._session.delete(row)
+        for row in list(
+            self._session.scalars(
+                select(ValConfidenceSnapshot).where(ValConfidenceSnapshot.val_run_id == val_run_id)
+            )
+        ):
+            self._session.delete(row)
+        self._session.flush()
 
     @staticmethod
     def _model_agreement_score(*, dcf_target_price: Decimal, relative_target_price: Decimal) -> Decimal:

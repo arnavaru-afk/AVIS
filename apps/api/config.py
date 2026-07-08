@@ -14,7 +14,7 @@ class SettingsError(RuntimeError):
 @dataclass(frozen=True, slots=True)
 class Settings:
     database_url: str
-    jwt_secret: str
+    jwt_public_key: str
     avis_env: str = "dev"
     log_level: str = "INFO"
 
@@ -43,7 +43,7 @@ def get_settings() -> Settings:
         raise SettingsError("AVIS_ENV must be one of: dev, staging, prod")
     return Settings(
         database_url=_required_env("DATABASE_URL"),
-        jwt_secret=_required_env("AVIS_JWT_SECRET"),
+        jwt_public_key=_required_env("AVIS_JWT_PUBLIC_KEY"),
         avis_env=avis_env,
         log_level=os.getenv("LOG_LEVEL", "INFO").strip().upper() or "INFO",
     )

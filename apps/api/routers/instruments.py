@@ -118,10 +118,18 @@ async def get_instrument_price_history(
     _current_user: CurrentUser,
     date_window: DateWindow,
     adjusted: bool = Query(default=True),
+    as_of_date: date | None = Query(default=None),
 ) -> PriceHistoryResponse:
     instrument = await _load_instrument(db, instrument_uuid)
     from_date, to_date = date_window
-    rows = await _fetch_price_rows(db, instrument, from_date=from_date, to_date=to_date, adjusted=adjusted)
+    rows = await _fetch_price_rows(
+        db,
+        instrument,
+        from_date=from_date,
+        to_date=to_date,
+        adjusted=adjusted,
+        as_of_date=as_of_date,
+    )
     for source_system in {row.source_system for row in rows}:
         register_compliance_check(
             request,

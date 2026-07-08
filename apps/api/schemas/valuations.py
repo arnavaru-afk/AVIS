@@ -29,11 +29,14 @@ class RunValuationRequest(AvisSchema):
 
 class ValuationRunResponse(AvisSchema):
     val_run_id: int
-    blended_value: Decimal
-    dcf_value: Decimal
+    run_uuid: UUID
+    status: str
+    queued_at: datetime
+    blended_value: Decimal | None = None
+    dcf_value: Decimal | None = None
     relative_value: Decimal | None
-    confidence_score: Decimal
-    override_required: bool
+    confidence_score: Decimal | None = None
+    override_required: bool | None = None
 
 
 class AssumptionEntryResponse(AvisSchema):

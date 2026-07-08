@@ -15,7 +15,7 @@ from apps.api.config import Settings
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
-    """Decode HS256 JWTs for protected API routes and attach user context."""
+    """Decode RS256 JWTs for protected API routes and attach user context."""
 
     def __init__(self, app, *, settings: Settings) -> None:
         super().__init__(app)
@@ -35,8 +35,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
         try:
             payload = jwt.decode(
                 token,
-                self._settings.jwt_secret,
-                algorithms=["HS256"],
+                self._settings.jwt_public_key,
+                algorithms=["RS256"],
                 options={"require": ["exp"]},
             )
         except ExpiredSignatureError:

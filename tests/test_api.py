@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 import uuid
-from datetime import UTC, date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,16 +18,52 @@ from sqlalchemy.orm import Session
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+TEST_PRIVATE_KEY = """-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQC5PNHqq75cuPMx
++Q7vk4XUnO7cxXSmITzfUU2IwNYgrFFn6aDD75BPgkUI+VrDNVaS1xC+i0NUwFQ9
+umM95eFpXLyoORjIXGjR8vURfqJ+m3DK/r6j4JGR/yjKzzKMcU5QJVilnpspurI/
+oT1zU76a6bkMWJTmaKxbnW6Ipr20hG5Y9PbYLKwmGtEOll7Zfwglc48g1sspy5Ot
+LiSK4mVEMrCR9VAs9Mc+twYVzQqc/R2QEn7q/nezexvftmBs42fbj3io2WktlCw3
+bVmBezNOxlirFluVhVuE8132dEr+lEyXsGviSoIFaA0LgwZjZX6yIat3ZpgZ5fbh
+TtaY1K5rAgMBAAECggEABdNI0rV19hqG42JuutAL3GTXCjBXe8X90RQQeSV/VmW0
+5ayuNps5EZcKLr8QwKTTxShoSWW9x1OJEqvi5RZuoU6eTDgHdH2bekbGuDcgSxT+
+VhPu0N6GFW5NzRr4/vutN84E3KiBPq21X1TlxtOyYdLJ0/6RKDHQgc0QpdGAk8Ws
+stnJPFcOW3EzDxdzAmwjYtd9C39JU/aCJZP91qD6pVrbx8qzfbvH5pLtwPdcN94f
+NvjrHw6TgkMzKBKQ7jaNrJ8FzI5d98owyldeuZf0GyeuS/Wmi/ZQra3PUrSRvPcg
+d//fKVDNKZ7i+9zj+3Nm+WMk7WwQDa+/Xdg5XXLDUQKBgQDgSspUhvRpRJCTJhSZ
+cPrEd/drY3VTlNskWN4xaWIQDyjqagDXwHyQFERZW9GTnCjPujdC3X/7/zMqikzN
+s3sZT0dZ8GrB+IhIZmToYK1zYwHR3/jIxtB4UJk6wF6nfda2zeKAsccbXBG+e07X
+IThuyf5ffc4kgqMMLIQtfv6e0wKBgQDTbKGeM96ePSOUsinRGZ+9KLfmQb/D8OBG
+FJMYsJ2c1fQk+RFAmUazVVJ2lVNiO0prQwWUPvfEgyEi/AO4I6wj6/ZWK83buq2q
+XV9B7qmEaP/X8r7cg1PMeXovElMxSTwaTmuF7w70lTVwoN0hrVKlPDbiE46UafLr
+AVtXSUTjCQKBgATqHpzTiC92TSSsRO9HxnbfmhBEUaHPNS4KtHOot3lam67nO7V+
+hjwx9X1vwZvWZB6JGgThDZjb8qcP+LbZI+1eC1YxKmWtqG7Nr5BX7fUFSljq62ya
+zp6URYdAB9LrsvS2diwTuSUkU081LHkSRUZILsaw3v91zVTK9Op6SeH5AoGBAJW6
+0DanC1jLecBb8Mt6NyuSg7KZC8MretmGxqnsoqKoz0/D6Fj0dCKbIVyD4lqmHM0b
+2P6lHXlZWIVbLxMgiE+kU3+xZAfiDA2kNMsPx5PTfKUl789hXl5oBYUCmFJGSD9l
+HDbtF41VglQySIkKI4aLv16adRZcdkHCYzrM0/FpAoGBAJS9pV00+2K1vBoC1Ai7
+/nZJrmg+q3Ge4wJhSxP58OnU9AP6YzOlR9fBZEpqcPVjnqC8oVXSPbEWpJGul+0C
+FwP8aR1O1lBdqyLt857CPHE2niqu5uWQto3Xzq2iSvd4mPgW533LYpU3MLsKJJae
+GDoCcMkZ7EsoEX8FozSkn6k2
+-----END PRIVATE KEY-----"""
+
+TEST_PUBLIC_KEY = """-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuTzR6qu+XLjzMfkO75OF
+1Jzu3MV0piE831FNiMDWIKxRZ+mgw++QT4JFCPlawzVWktcQvotDVMBUPbpjPeXh
+aVy8qDkYyFxo0fL1EX6ifptwyv6+o+CRkf8oys8yjHFOUCVYpZ6bKbqyP6E9c1O+
+mum5DFiU5misW51uiKa9tIRuWPT22CysJhrRDpZe2X8IJXOPINbLKcuTrS4kiuJl
+RDKwkfVQLPTHPrcGFc0KnP0dkBJ+6v53s3sb37ZgbONn2494qNlpLZQsN21ZgXsz
+TsZYqxZblYVbhPNd9nRK/pRMl7Br4kqCBWgNC4MGY2V+siGrd2aYGeX24U7WmNSu
+awIDAQAB
+-----END PUBLIC KEY-----"""
+
 os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///./avis_api_import_guard.db")
-os.environ.setdefault("AVIS_JWT_SECRET", "import-guard-secret")
+os.environ.setdefault("AVIS_JWT_PUBLIC_KEY", TEST_PUBLIC_KEY)
 
 from apps.api.config import Settings
 from apps.api.dependencies import get_current_user, get_db
 from apps.api.main import create_app
-from apps.api.middleware import AuthMiddleware, ComplianceMiddleware
-from apps.api.middleware.compliance import DEFAULT_SOURCE_POLICIES
 from apps.api.routers import instruments, market, pipeline, quality, valuations
-from apps.api.dependencies import register_compliance_check
 from avis.db.base import Base
 from avis.db.models import (
     AuthAuditEvent,
@@ -134,22 +171,21 @@ def api_env(tmp_path: Path):
     )
 
     ids = _seed_database(engine)
-    settings = Settings(database_url=sync_url, jwt_secret="test-secret", avis_env="dev", log_level="INFO")
+    settings = Settings(database_url=sync_url, jwt_public_key=TEST_PUBLIC_KEY, avis_env="dev", log_level="INFO")
     app = create_app(settings=settings)
     with TestClient(app) as client:
         yield {
             "client": client,
             "engine": engine,
             "ids": ids,
-            "secret": settings.jwt_secret,
         }
     engine.dispose()
 
 
 @pytest.fixture()
 def auth_headers(api_env):
-    analyst_token = _token(api_env["ids"]["analyst_uuid"], api_env["secret"])
-    viewer_token = _token(api_env["ids"]["viewer_uuid"], api_env["secret"])
+    analyst_token = _token(api_env["ids"]["analyst_uuid"])
+    viewer_token = _token(api_env["ids"]["viewer_uuid"])
     return {
         "analyst": {"Authorization": f"Bearer {analyst_token}"},
         "viewer": {"Authorization": f"Bearer {viewer_token}"},
@@ -271,7 +307,7 @@ def test_auth_valid_token_passes(api_env, auth_headers) -> None:
 
 
 def test_auth_expired_token_returns_401(api_env) -> None:
-    expired = _token(api_env["ids"]["analyst_uuid"], api_env["secret"], expires_delta=timedelta(seconds=-1))
+    expired = _token(api_env["ids"]["analyst_uuid"], expires_delta=timedelta(seconds=-1))
 
     response = api_env["client"].get("/api/v1/pipeline/runs", headers={"Authorization": f"Bearer {expired}"})
 
@@ -323,17 +359,15 @@ def test_post_valuation_round_trip_preserves_assumption_set(api_env, auth_header
         json=_valuation_request(api_env["ids"]["instrument_uuid"]),
     )
 
-    assert run_response.status_code == 200, run_response.text
-    payload = run_response.json()
-    detail = api_env["client"].get(
-        f"/api/v1/valuations/{payload['val_run_id']}",
-        headers=auth_headers["analyst"],
-    )
+    assert run_response.status_code == 202, run_response.text
+    submitted = run_response.json()
+    assert submitted["status"] == "QUEUED"
+    detail = _wait_for_valuation_completion(api_env["client"], submitted["val_run_id"], auth_headers["analyst"])
 
-    assert detail.status_code == 200
-    assumptions = {row["key"]: row for row in detail.json()["assumption_set"]}
+    assumptions = {row["key"]: row for row in detail["assumption_set"]}
     assert Decimal(assumptions["WACC"]["numeric_value"]) == Decimal("0.11")
     assert assumptions["RUN_LABEL"]["text_value"] == "api-regression"
+    assert detail["status"] in {"SUCCESS", "OVERRIDDEN"}
 
 
 def test_price_history_enforces_as_of_window(api_env, auth_headers) -> None:
@@ -341,6 +375,17 @@ def test_price_history_enforces_as_of_window(api_env, auth_headers) -> None:
         f"/api/v1/instruments/{api_env['ids']['instrument_uuid']}/price-history",
         headers=auth_headers["analyst"],
         params={"from_date": "2026-06-25", "to_date": "2026-06-26"},
+    )
+
+    assert response.status_code == 200
+    assert [row["trade_date"] for row in response.json()["rows"]] == ["2026-06-25", "2026-06-26"]
+
+
+def test_delisted_price_history_caps_at_delisting_date(api_env, auth_headers) -> None:
+    response = api_env["client"].get(
+        f"/api/v1/instruments/{api_env['ids']['delisted_instrument_uuid']}/price-history",
+        headers=auth_headers["analyst"],
+        params={"from_date": "2026-06-25", "to_date": "2026-06-28", "as_of_date": "2026-06-28"},
     )
 
     assert response.status_code == 200
@@ -398,10 +443,13 @@ def test_low_confidence_run_sets_override_required_and_null_relative(api_env, au
         json=_valuation_request(api_env["ids"]["solo_instrument_uuid"]),
     )
 
-    assert response.status_code == 200, response.text
-    payload = response.json()
-    assert payload["override_required"] is True
-    assert payload["relative_value"] is None
+    assert response.status_code == 202, response.text
+    detail = _wait_for_valuation_completion(api_env["client"], response.json()["val_run_id"], auth_headers["analyst"])
+    relative_output = next(output for output in detail["model_outputs"] if output["model_name"] == "RELATIVE")
+    confidence = detail["confidence_snapshots"][-1]
+    assert detail["status"] == "OVERRIDDEN"
+    assert relative_output["target_price"] is None
+    assert Decimal(confidence["overall_confidence"]) < Decimal("40")
 
 
 def _valuation_request(instrument_uuid: uuid.UUID) -> dict[str, object]:
@@ -421,12 +469,26 @@ def _valuation_request(instrument_uuid: uuid.UUID) -> dict[str, object]:
     }
 
 
-def _token(user_uuid: uuid.UUID, secret: str, *, expires_delta: timedelta = timedelta(hours=1)) -> str:
+def _token(user_uuid: uuid.UUID, *, expires_delta: timedelta = timedelta(hours=1)) -> str:
     payload = {
         "user_uuid": str(user_uuid),
         "exp": datetime.now(UTC) + expires_delta,
     }
-    return jwt.encode(payload, secret, algorithm="HS256")
+    return jwt.encode(payload, TEST_PRIVATE_KEY, algorithm="RS256")
+
+
+def _wait_for_valuation_completion(client: TestClient, val_run_id: int, headers: dict[str, str]) -> dict[str, object]:
+    deadline = time.monotonic() + 5
+    last_payload: dict[str, object] | None = None
+    while time.monotonic() < deadline:
+        response = client.get(f"/api/v1/valuations/{val_run_id}", headers=headers)
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        last_payload = payload
+        if payload["status"] not in {"QUEUED", "RUNNING"}:
+            return payload
+        time.sleep(0.05)
+    raise AssertionError(f"Valuation run {val_run_id} did not complete in time: {last_payload}")
 
 
 def _seed_database(engine) -> dict[str, object]:
@@ -434,6 +496,7 @@ def _seed_database(engine) -> dict[str, object]:
     instrument_uuid = uuid.uuid4()
     restricted_uuid = uuid.uuid4()
     solo_uuid = uuid.uuid4()
+    delisted_uuid = uuid.uuid4()
     analyst_uuid = uuid.uuid4()
     viewer_uuid = uuid.uuid4()
     with Session(engine) as session:
@@ -446,6 +509,7 @@ def _seed_database(engine) -> dict[str, object]:
             RefCompany(company_id=50, company_uuid=uuid.uuid4(), legal_name="Peer4", display_name="Peer4", isin_primary="INE000A01050", sector_code="FMCG", industry_code="FMCG_CORE", incorporation_country="IN", is_listed=True, is_active=True, created_at=now, updated_at=now),
             RefCompany(company_id=60, company_uuid=uuid.uuid4(), legal_name="SoloCo", display_name="SoloCo", isin_primary="INE000A01060", sector_code="BANK", industry_code="BANK_PRIVATE", incorporation_country="IN", is_listed=True, is_active=True, created_at=now, updated_at=now),
             RefCompany(company_id=70, company_uuid=uuid.uuid4(), legal_name="RestrictedCo", display_name="RestrictedCo", isin_primary="INE000A01070", sector_code="FMCG", industry_code="FMCG_CORE", incorporation_country="IN", is_listed=True, is_active=True, created_at=now, updated_at=now),
+            RefCompany(company_id=80, company_uuid=uuid.uuid4(), legal_name="DelistedCo", display_name="DelistedCo", isin_primary="INE000A01080", sector_code="FMCG", industry_code="FMCG_CORE", incorporation_country="IN", is_listed=False, is_active=False, created_at=now, updated_at=now),
         ]
         session.add_all(companies)
         instruments_seed = [
@@ -456,6 +520,7 @@ def _seed_database(engine) -> dict[str, object]:
             RefInstrument(instrument_id=204, instrument_uuid=uuid.uuid4(), company_id=50, exchange_id=1, symbol="P4", instrument_type="EQUITY", listing_date=date(2020, 1, 1), delisting_date=None, tick_size=Decimal("0.05"), lot_size=1, is_active=True, created_at=now, updated_at=now),
             RefInstrument(instrument_id=301, instrument_uuid=solo_uuid, company_id=60, exchange_id=1, symbol="SOLO", instrument_type="EQUITY", listing_date=date(2020, 1, 1), delisting_date=None, tick_size=Decimal("0.05"), lot_size=1, is_active=True, created_at=now, updated_at=now),
             RefInstrument(instrument_id=401, instrument_uuid=restricted_uuid, company_id=70, exchange_id=1, symbol="REST", instrument_type="EQUITY", listing_date=date(2020, 1, 1), delisting_date=None, tick_size=Decimal("0.05"), lot_size=1, is_active=True, created_at=now, updated_at=now),
+            RefInstrument(instrument_id=501, instrument_uuid=delisted_uuid, company_id=80, exchange_id=1, symbol="DLST", instrument_type="EQUITY", listing_date=date(2020, 1, 1), delisting_date=date(2026, 6, 26), tick_size=Decimal("0.05"), lot_size=1, is_active=False, created_at=now, updated_at=now),
         ]
         session.add_all(instruments_seed)
         session.add(RefSymbolAlias(alias_id=1, instrument_id=101, source_system="NSE", alias_symbol="TARGET", valid_from=date(2020, 1, 1), valid_to=None, created_at=now))
@@ -464,6 +529,9 @@ def _seed_database(engine) -> dict[str, object]:
             MarketOhlcv1D(ohlcv_1d_id=2, instrument_id=101, trade_date=date(2026, 6, 26), open_px=Decimal("102"), high_px=Decimal("103"), low_px=Decimal("101"), close_px=Decimal("102"), adj_close_px=Decimal("96"), volume=Decimal("1100"), turnover=None, source_system="INTERNAL_MODEL", source_record_id="row2", ingested_at=now),
             MarketOhlcv1D(ohlcv_1d_id=3, instrument_id=101, trade_date=date(2026, 6, 27), open_px=Decimal("104"), high_px=Decimal("105"), low_px=Decimal("103"), close_px=Decimal("104"), adj_close_px=Decimal("97"), volume=Decimal("1200"), turnover=None, source_system="INTERNAL_MODEL", source_record_id="row3", ingested_at=now),
             MarketOhlcv1D(ohlcv_1d_id=4, instrument_id=401, trade_date=date(2026, 6, 25), open_px=Decimal("50"), high_px=Decimal("51"), low_px=Decimal("49"), close_px=Decimal("50"), adj_close_px=None, volume=Decimal("900"), turnover=None, source_system="NSE_EOD", source_record_id="row4", ingested_at=now),
+            MarketOhlcv1D(ohlcv_1d_id=5, instrument_id=501, trade_date=date(2026, 6, 25), open_px=Decimal("80"), high_px=Decimal("81"), low_px=Decimal("79"), close_px=Decimal("80"), adj_close_px=Decimal("80"), volume=Decimal("500"), turnover=None, source_system="INTERNAL_MODEL", source_record_id="row5", ingested_at=now),
+            MarketOhlcv1D(ohlcv_1d_id=6, instrument_id=501, trade_date=date(2026, 6, 26), open_px=Decimal("78"), high_px=Decimal("79"), low_px=Decimal("77"), close_px=Decimal("78"), adj_close_px=Decimal("78"), volume=Decimal("450"), turnover=None, source_system="INTERNAL_MODEL", source_record_id="row6", ingested_at=now),
+            MarketOhlcv1D(ohlcv_1d_id=7, instrument_id=501, trade_date=date(2026, 6, 27), open_px=Decimal("70"), high_px=Decimal("71"), low_px=Decimal("69"), close_px=Decimal("70"), adj_close_px=Decimal("70"), volume=Decimal("400"), turnover=None, source_system="INTERNAL_MODEL", source_record_id="row7", ingested_at=now),
         ])
         _seed_financials(session, now)
         session.add(OpsPipelineRun(pipeline_run_id=1, run_uuid=uuid.uuid4(), pipeline_name="daily_ingestion", run_mode="DAILY", triggered_by="scheduler", status="SUCCESS", started_at=now, ended_at=now + timedelta(minutes=5), run_context={"source": "scheduler"}))
@@ -490,6 +558,7 @@ def _seed_database(engine) -> dict[str, object]:
         "instrument_uuid": instrument_uuid,
         "restricted_instrument_uuid": restricted_uuid,
         "solo_instrument_uuid": solo_uuid,
+        "delisted_instrument_uuid": delisted_uuid,
         "incident_id": 1,
         "analyst_uuid": analyst_uuid,
         "viewer_uuid": viewer_uuid,
@@ -497,7 +566,7 @@ def _seed_database(engine) -> dict[str, object]:
 
 
 def _seed_financials(session: Session, now: datetime) -> None:
-    revenue_map = {101: "1000", 201: "1500", 202: "1400", 203: "1450", 204: "1520", 301: "1000", 401: "900"}
+    revenue_map = {101: "1000", 201: "1500", 202: "1400", 203: "1450", 204: "1520", 301: "1000", 401: "900", 501: "800"}
     metrics_map = {
         101: {"TAX_RATE": "0.25", "SHARE_COUNT": "100", "NET_DEBT": "200", "ENTERPRISE_VALUE": "1500", "EQUITY_VALUE": "1300", "EBITDA": "160", "EARNINGS": "110", "BOOK_VALUE": "700", "SALES": "1200", "DEPRECIATION_AND_AMORTIZATION": "40", "CAPEX": "55", "DELTA_NWC": "10"},
         201: {"TAX_RATE": "0.25", "SHARE_COUNT": "100", "NET_DEBT": "200", "ENTERPRISE_VALUE": "1800", "EQUITY_VALUE": "1600", "EBITDA": "180", "EARNINGS": "120", "BOOK_VALUE": "900", "SALES": "1500", "DEPRECIATION_AND_AMORTIZATION": "40", "CAPEX": "55", "DELTA_NWC": "10"},
@@ -506,6 +575,7 @@ def _seed_financials(session: Session, now: datetime) -> None:
         204: {"TAX_RATE": "0.25", "SHARE_COUNT": "100", "NET_DEBT": "200", "ENTERPRISE_VALUE": "1900", "EQUITY_VALUE": "1700", "EBITDA": "190", "EARNINGS": "125", "BOOK_VALUE": "920", "SALES": "1520", "DEPRECIATION_AND_AMORTIZATION": "40", "CAPEX": "55", "DELTA_NWC": "10"},
         301: {"TAX_RATE": "0.25", "SHARE_COUNT": "100", "NET_DEBT": "200", "ENTERPRISE_VALUE": "1400", "EQUITY_VALUE": "1200", "EBITDA": "150", "EARNINGS": "100", "BOOK_VALUE": "650", "SALES": "1100", "DEPRECIATION_AND_AMORTIZATION": "40", "CAPEX": "55", "DELTA_NWC": "10"},
         401: {"TAX_RATE": "0.25", "SHARE_COUNT": "100", "NET_DEBT": "180", "ENTERPRISE_VALUE": "1200", "EQUITY_VALUE": "1020", "EBITDA": "120", "EARNINGS": "80", "BOOK_VALUE": "500", "SALES": "900", "DEPRECIATION_AND_AMORTIZATION": "30", "CAPEX": "45", "DELTA_NWC": "8"},
+        501: {"TAX_RATE": "0.25", "SHARE_COUNT": "100", "NET_DEBT": "150", "ENTERPRISE_VALUE": "1000", "EQUITY_VALUE": "850", "EBITDA": "110", "EARNINGS": "75", "BOOK_VALUE": "450", "SALES": "800", "DEPRECIATION_AND_AMORTIZATION": "25", "CAPEX": "35", "DELTA_NWC": "6"},
     }
     statement_id = 1
     metric_id = 1
