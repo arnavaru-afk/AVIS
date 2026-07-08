@@ -14,7 +14,12 @@ from sqlalchemy.orm import Session
 from avis.core.valuation_engine.assumptions import AssumptionSetManager, DcfAssumptions
 from avis.core.valuation_engine.confidence import ConfidenceInput, ConfidenceScoreResult, ConfidenceScoringEngine
 from avis.core.valuation_engine.dcf import DcfEngine, DcfProjectionInput, DcfResult
-from avis.core.valuation_engine.relative import RelativeEngine, RelativePeerPoint, RelativeValuationResult
+from avis.core.valuation_engine.relative import (
+    InsufficientPeerSetError,
+    RelativeEngine,
+    RelativePeerPoint,
+    RelativeValuationResult,
+)
 from avis.db.models import (
     RefInstrument,
     ValAttribution,
@@ -35,7 +40,7 @@ class RelativeInputBundle:
 class ValuationRunResult:
     val_run_id: int
     dcf_result: DcfResult
-    relative_result: RelativeValuationResult
+    relative_result: RelativeValuationResult | None
     confidence_result: ConfidenceScoreResult
     blended_target_price: Decimal
     analyst_override_required: bool
@@ -85,31 +90,48 @@ class ValuationOrchestrator:
         self._assumption_manager.store_dcf_assumptions(val_run_id=val_run.val_run_id, assumptions=dcf_assumptions)
 
         dcf_result = self._dcf_engine.run(assumptions=dcf_assumptions, projection_input=dcf_projection_input)
-        relative_result = self._relative_engine.run(
-            target_instrument_id=relative_inputs.target_instrument_id,
-            as_of_date=relative_inputs.as_of_date.date(),
-            target_metrics=relative_inputs.target_metrics,
-        )
-        model_agreement = self._model_agreement_score(
-            dcf_target_price=dcf_result.intrinsic_value_per_share,
-            relative_target_price=relative_result.point_estimate_target_price,
-        )
+        try:
+            relative_result = self._relative_engine.run(
+                target_instrument_id=relative_inputs.target_instrument_id,
+                as_of_date=relative_inputs.as_of_date.date(),
+                target_metrics=relative_inputs.target_metrics,
+            )
+        except InsufficientPeerSetError as exc:
+            relative_result = None
+            relative_failure_reason = str(exc)
+        else:
+            relative_failure_reason = None
+
+        if relative_result is None:
+            model_agreement = Decimal("0")
+            peer_count = 0
+        else:
+            model_agreement = self._model_agreement_score(
+                dcf_target_price=dcf_result.intrinsic_value_per_share,
+                relative_target_price=relative_result.point_estimate_target_price,
+            )
+            peer_count = max(result.peer_count for result in relative_result.multiple_results)
         confidence_result = self._confidence_engine.score(
             ConfidenceInput(
                 data_quality_score=data_quality_score,
-                peer_count=max(result.peer_count for result in relative_result.multiple_results),
+                peer_count=peer_count,
                 assumption_stability=assumption_stability,
                 model_agreement=model_agreement,
             )
         )
 
-        blended_target_price = (
-            dcf_result.intrinsic_value_per_share + relative_result.point_estimate_target_price
-        ) / Decimal("2")
-        blended_equity_value = (dcf_result.equity_value + relative_result.point_estimate_equity_value) / Decimal("2")
-        blended_enterprise_value = (
-            dcf_result.enterprise_value + relative_result.point_estimate_enterprise_value
-        ) / Decimal("2")
+        if relative_result is None:
+            blended_target_price = dcf_result.intrinsic_value_per_share
+            blended_equity_value = dcf_result.equity_value
+            blended_enterprise_value = dcf_result.enterprise_value
+        else:
+            blended_target_price = (
+                dcf_result.intrinsic_value_per_share + relative_result.point_estimate_target_price
+            ) / Decimal("2")
+            blended_equity_value = (dcf_result.equity_value + relative_result.point_estimate_equity_value) / Decimal("2")
+            blended_enterprise_value = (
+                dcf_result.enterprise_value + relative_result.point_estimate_enterprise_value
+            ) / Decimal("2")
 
         self._store_model_output(
             val_run_id=val_run.val_run_id,
@@ -125,19 +147,35 @@ class ValuationOrchestrator:
                 "result": dcf_result.as_payload(),
             },
         )
-        self._store_model_output(
-            val_run_id=val_run.val_run_id,
-            model_name="RELATIVE",
-            currency_code=currency_code,
-            equity_value=relative_result.point_estimate_equity_value,
-            enterprise_value=relative_result.point_estimate_enterprise_value,
-            target_price=relative_result.point_estimate_target_price,
-            weight=Decimal("0.5"),
-            output_payload={
-                "inputs": _serialize_input_bundle(relative_inputs),
-                "result": relative_result.as_payload(),
-            },
-        )
+        if relative_result is None:
+            self._store_model_output(
+                val_run_id=val_run.val_run_id,
+                model_name="RELATIVE",
+                currency_code=currency_code,
+                equity_value=None,
+                enterprise_value=None,
+                target_price=None,
+                weight=Decimal("0.5"),
+                output_payload={
+                    "inputs": _serialize_input_bundle(relative_inputs),
+                    "status": "UNAVAILABLE",
+                    "reason": relative_failure_reason,
+                },
+            )
+        else:
+            self._store_model_output(
+                val_run_id=val_run.val_run_id,
+                model_name="RELATIVE",
+                currency_code=currency_code,
+                equity_value=relative_result.point_estimate_equity_value,
+                enterprise_value=relative_result.point_estimate_enterprise_value,
+                target_price=relative_result.point_estimate_target_price,
+                weight=Decimal("0.5"),
+                output_payload={
+                    "inputs": _serialize_input_bundle(relative_inputs),
+                    "result": relative_result.as_payload(),
+                },
+            )
         self._store_model_output(
             val_run_id=val_run.val_run_id,
             model_name="BLENDED",
@@ -149,7 +187,9 @@ class ValuationOrchestrator:
             output_payload={
                 "inputs_reconstructable": True,
                 "dcf_target_price": str(dcf_result.intrinsic_value_per_share),
-                "relative_target_price": str(relative_result.point_estimate_target_price),
+                "relative_target_price": (
+                    str(relative_result.point_estimate_target_price) if relative_result is not None else None
+                ),
                 "confidence": confidence_result.as_payload(),
                 "analyst_override_required": confidence_result.analyst_override_required,
             },
@@ -220,9 +260,9 @@ class ValuationOrchestrator:
         val_run_id: int,
         model_name: str,
         currency_code: str,
-        equity_value: Decimal,
-        enterprise_value: Decimal,
-        target_price: Decimal,
+        equity_value: Decimal | None,
+        enterprise_value: Decimal | None,
+        target_price: Decimal | None,
         weight: Decimal,
         output_payload: dict[str, Any],
     ) -> ValModelOutput:
@@ -265,6 +305,21 @@ class ValuationOrchestrator:
             )
             _assign_pk_if_sqlite(self._session, row, "attribution_id", ValAttribution)
             self._session.add(row)
+        terminal_row = ValAttribution(
+            val_run_id=val_run_id,
+            driver_type="DCF_TERMINAL_VALUE",
+            driver_key="TERMINAL_VALUE",
+            impact_value_abs=dcf_result.terminal_present_value,
+            impact_value_pct=None,
+            direction=_direction(dcf_result.terminal_present_value),
+            evidence_ref={
+                "terminal_value": str(dcf_result.terminal_value),
+                "terminal_present_value": str(dcf_result.terminal_present_value),
+            },
+            created_at=_db_now(),
+        )
+        _assign_pk_if_sqlite(self._session, terminal_row, "attribution_id", ValAttribution)
+        self._session.add(terminal_row)
         self._session.flush()
 
     def _store_confidence_snapshot(

@@ -83,7 +83,11 @@ def session() -> Session:
 
 
 def test_null_check_in_isolation(session: Session, tmp_path: Path) -> None:
-    gate = QualityGateEngine(session=session, quarantine_root=tmp_path / "quarantine")
+    gate = QualityGateEngine(
+        session=session,
+        quarantine_root=tmp_path / "quarantine",
+        now_provider=_fixed_now,
+    )
     pipeline_run = _seed_pipeline_run(session, "dq_null_check")
 
     decision = gate.evaluate_record(
@@ -108,7 +112,11 @@ def test_null_check_in_isolation(session: Session, tmp_path: Path) -> None:
 
 
 def test_range_check_in_isolation(session: Session, tmp_path: Path) -> None:
-    gate = QualityGateEngine(session=session, quarantine_root=tmp_path / "quarantine")
+    gate = QualityGateEngine(
+        session=session,
+        quarantine_root=tmp_path / "quarantine",
+        now_provider=_fixed_now,
+    )
     pipeline_run = _seed_pipeline_run(session, "dq_range_check")
 
     decision = gate.evaluate_record(
@@ -163,7 +171,11 @@ def test_stale_check_in_isolation(session: Session, tmp_path: Path) -> None:
 
 def test_duplicate_check_in_isolation(session: Session, tmp_path: Path) -> None:
     _seed_market_row(session, instrument_id=101, trade_date=date(2026, 6, 26), close_px="100", source_system="NSE_EOD")
-    gate = QualityGateEngine(session=session, quarantine_root=tmp_path / "quarantine")
+    gate = QualityGateEngine(
+        session=session,
+        quarantine_root=tmp_path / "quarantine",
+        now_provider=_fixed_now,
+    )
     pipeline_run = _seed_pipeline_run(session, "dq_duplicate_check")
 
     decision = gate.evaluate_record(
@@ -188,7 +200,11 @@ def test_duplicate_check_in_isolation(session: Session, tmp_path: Path) -> None:
 
 
 def test_symbol_resolved_check_in_isolation(session: Session, tmp_path: Path) -> None:
-    gate = QualityGateEngine(session=session, quarantine_root=tmp_path / "quarantine")
+    gate = QualityGateEngine(
+        session=session,
+        quarantine_root=tmp_path / "quarantine",
+        now_provider=_fixed_now,
+    )
     pipeline_run = _seed_pipeline_run(session, "dq_symbol_check")
 
     decision = gate.evaluate_record(
@@ -214,7 +230,11 @@ def test_symbol_resolved_check_in_isolation(session: Session, tmp_path: Path) ->
 
 def test_circuit_breaker_in_isolation(session: Session, tmp_path: Path) -> None:
     _seed_market_row(session, instrument_id=101, trade_date=date(2026, 6, 25), close_px="100", source_system="NSE_EOD")
-    gate = QualityGateEngine(session=session, quarantine_root=tmp_path / "quarantine")
+    gate = QualityGateEngine(
+        session=session,
+        quarantine_root=tmp_path / "quarantine",
+        now_provider=_fixed_now,
+    )
     pipeline_run = _seed_pipeline_run(session, "dq_circuit_breaker")
 
     inserted: list[QualityRecord] = []
@@ -245,7 +265,11 @@ def test_circuit_breaker_in_isolation(session: Session, tmp_path: Path) -> None:
 
 
 def test_quarantine_routing_and_override_recording(session: Session, tmp_path: Path) -> None:
-    gate = QualityGateEngine(session=session, quarantine_root=tmp_path / "quarantine")
+    gate = QualityGateEngine(
+        session=session,
+        quarantine_root=tmp_path / "quarantine",
+        now_provider=_fixed_now,
+    )
     pipeline_run = _seed_pipeline_run(session, "dq_override_flow")
 
     decision = gate.evaluate_record(
@@ -282,7 +306,11 @@ def test_quarantine_routing_and_override_recording(session: Session, tmp_path: P
 
 def test_critical_row_never_reaches_curated_store(session: Session, tmp_path: Path) -> None:
     _seed_market_row(session, instrument_id=101, trade_date=date(2026, 6, 25), close_px="100", source_system="NSE_EOD")
-    gate = QualityGateEngine(session=session, quarantine_root=tmp_path / "quarantine")
+    gate = QualityGateEngine(
+        session=session,
+        quarantine_root=tmp_path / "quarantine",
+        now_provider=_fixed_now,
+    )
     pipeline_run = _seed_pipeline_run(session, "dq_integration_gate")
 
     def persist(record: QualityRecord) -> None:
@@ -349,7 +377,11 @@ def test_compliance_restricted_source_blocked_at_api_boundary(session: Session) 
 
 
 def test_lineage_emitted_for_pipeline_run(session: Session, tmp_path: Path) -> None:
-    gate = QualityGateEngine(session=session, quarantine_root=tmp_path / "quarantine")
+    gate = QualityGateEngine(
+        session=session,
+        quarantine_root=tmp_path / "quarantine",
+        now_provider=_fixed_now,
+    )
     pipeline_run = _seed_pipeline_run(session, "dq_lineage")
 
     persisted: list[QualityRecord] = []
@@ -503,6 +535,10 @@ def _next_id(session: Session, model, column_name: str) -> int:
     column = getattr(model, column_name)
     current_max = session.scalar(select(func.max(column)))
     return 1 if current_max is None else int(current_max) + 1
+
+
+def _fixed_now() -> datetime:
+    return datetime(2026, 6, 27, 12, 0, tzinfo=timezone.utc)
 
 
 def _now() -> datetime:
