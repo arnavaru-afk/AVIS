@@ -272,6 +272,25 @@ class DataRouter:
             detailed_incidents.append(payload)
         return detailed_incidents
 
+    def resolve_incident(self, incident_id: int, justification: str, analyst_id: str | None = None) -> dict[str, Any] | None:
+        if not self.avis_enabled or self.quality is None:
+            return None
+        analyst = analyst_id or os.getenv("AVIS_ANALYST_ID")
+        if not analyst or len(justification.strip()) < 20:
+            return None
+        try:
+            response = self.quality.resolve_incident(incident_id, justification.strip(), analyst)
+        except Exception:
+            return None
+        if response is None:
+            return None
+        return {
+            "incident_id": response.incident_id,
+            "override_id": response.override_id,
+            "incident_status": response.incident_status,
+            "resolution_notes": response.resolution_notes,
+        }
+
     def pipeline_status(self) -> list[dict[str, Any]] | None:
         if not self.avis_enabled or self.pipeline is None:
             return None
@@ -282,6 +301,172 @@ class DataRouter:
         if runs is None:
             return None
         return [self._pipeline_run_to_dict(item) for item in runs]
+
+    def pipeline_run_detail(self, run_id: int) -> dict[str, Any] | None:
+        if not self.avis_enabled or self.pipeline is None:
+            return None
+        try:
+            detail = self.pipeline.get_run(run_id)
+        except Exception:
+            return None
+        if detail is None:
+            return None
+        return {
+            "pipeline_run_id": detail.pipeline_run_id,
+            "run_uuid": str(detail.run_uuid),
+            "pipeline_name": detail.pipeline_name,
+            "run_mode": detail.run_mode,
+            "triggered_by": detail.triggered_by,
+            "status": detail.status,
+            "started_at": detail.started_at,
+            "ended_at": detail.ended_at,
+            "run_context": detail.run_context,
+            "sla_breach": detail.sla_breach,
+            "job_events": [
+                {
+                    "job_event_id": event.job_event_id,
+                    "job_name": event.job_name,
+                    "event_type": event.event_type,
+                    "event_ts": event.event_ts,
+                    "message": event.message,
+                    "metrics_payload": event.metrics_payload,
+                }
+                for event in detail.job_events
+            ],
+        }
+
+    def list_instruments(self, exchange: str | None = None) -> list[dict[str, Any]] | None:
+        if not self.avis_enabled or self.instruments is None:
+            return None
+        page = 1
+        page_size = 200
+        items: list[dict[str, Any]] = []
+        total = None
+        try:
+            while total is None or len(items) < total:
+                params: dict[str, Any] = {"page": page, "page_size": page_size}
+                if exchange:
+                    params["exchange"] = exchange
+                payload = self.instruments._get("/api/v1/instruments", params=params)
+                if payload is None:
+                    break
+                total = int(payload["pagination"]["total"])
+                for item in payload["items"]:
+                    items.append(
+                        {
+                            "instrument_uuid": str(item["instrument_uuid"]),
+                            "symbol": item["symbol"],
+                            "isin": item.get("isin"),
+                            "exchange": item.get("exchange"),
+                            "company_name": item.get("company_name"),
+                        }
+                    )
+                if (page * page_size) >= total:
+                    break
+                page += 1
+        except Exception:
+            return None
+        return items
+
+    def coverage_map(self, exchange: str | None = None) -> pd.DataFrame | None:
+        instruments = self.list_instruments(exchange=exchange)
+        if instruments is None:
+            return None
+        rows: list[dict[str, Any]] = []
+        lookback_start = date.today() - timedelta(days=3650)
+        today = date.today()
+        for instrument in instruments:
+            instrument_uuid = instrument["instrument_uuid"]
+            last_val_date = None
+            valuations = self.valuation_history(instrument_uuid)
+            if valuations:
+                last_val_date = valuations[0].get("as_of_ts")
+            last_price_date = None
+            if self.market is not None:
+                try:
+                    price_frame = self.market.ohlcv(instrument_uuid, lookback_start, today, adjusted=True)
+                    if price_frame is not None and not price_frame.empty:
+                        last_price_date = pd.to_datetime(price_frame["date"]).max()
+                except Exception:
+                    last_price_date = None
+            rows.append(
+                {
+                    "symbol": instrument["symbol"],
+                    "isin": instrument["isin"],
+                    "exchange": instrument["exchange"],
+                    "instrument_uuid": instrument_uuid,
+                    "last_price_date": last_price_date,
+                    "last_val_date": last_val_date,
+                    "valued": last_val_date is not None,
+                }
+            )
+        return pd.DataFrame(rows)
+
+    def valuation_run_browser(self, exchange: str | None = None) -> pd.DataFrame | None:
+        instruments = self.list_instruments(exchange=exchange)
+        if instruments is None:
+            return None
+        rows: list[dict[str, Any]] = []
+        for instrument in instruments:
+            history = self.valuation_history(instrument["instrument_uuid"]) or []
+            for run in history:
+                rows.append(
+                    {
+                        "instrument_uuid": instrument["instrument_uuid"],
+                        "instrument": instrument["symbol"],
+                        "exchange": instrument["exchange"],
+                        "val_run_id": run["val_run_id"],
+                        "run_date": run["as_of_ts"],
+                        "blended_value": run["blended_value"],
+                        "confidence_score": run["confidence_score"],
+                        "override_required": run["status"] == "OVERRIDDEN" or (
+                            run["confidence_score"] is not None and float(run["confidence_score"]) < 40
+                        ),
+                        "status": run["status"],
+                    }
+                )
+        if not rows:
+            return pd.DataFrame(
+                columns=[
+                    "instrument_uuid",
+                    "instrument",
+                    "exchange",
+                    "val_run_id",
+                    "run_date",
+                    "blended_value",
+                    "confidence_score",
+                    "override_required",
+                    "status",
+                ]
+            )
+        frame = pd.DataFrame(rows)
+        return frame.sort_values(["run_date", "val_run_id"], ascending=[False, False]).reset_index(drop=True)
+
+    def valuation_run_detail(self, val_run_id: int) -> dict[str, Any] | None:
+        if not self.avis_enabled or self.valuations is None:
+            return None
+        try:
+            detail = self.valuations.get_valuation(val_run_id)
+            attribution = self.valuations.get_attribution(val_run_id) or []
+        except Exception:
+            return None
+        if detail is None:
+            return None
+        outputs = {row.model_name.upper(): row for row in detail.model_outputs}
+        confidence = detail.confidence_snapshots[-1] if detail.confidence_snapshots else None
+        return {
+            "val_run_id": detail.val_run_id,
+            "instrument_uuid": str(detail.instrument_uuid),
+            "status": detail.status,
+            "run_label": detail.run_label,
+            "run_date": detail.as_of_ts,
+            "blended_value": self._to_float(outputs.get("BLENDED").target_price if outputs.get("BLENDED") else None),
+            "dcf_value": self._to_float(outputs.get("DCF").target_price if outputs.get("DCF") else None),
+            "relative_value": self._to_float(outputs.get("RELATIVE").target_price if outputs.get("RELATIVE") else None),
+            "confidence_score": self._confidence_value(confidence),
+            "override_required": detail.status == "OVERRIDDEN" or self._override_required(confidence),
+            "attribution_rows": [self._attribution_to_dict(row) for row in attribution],
+        }
 
     def avis_status(self) -> dict[str, Any]:
         if not self.avis_enabled or self.instruments is None:

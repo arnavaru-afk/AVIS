@@ -5,6 +5,7 @@ import sys
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pandas as pd
@@ -42,9 +43,13 @@ class MockSession:
 class FakeInstrumentsClient:
     def __init__(self, results=None):
         self.results = results or []
+        self.payload = None
 
     def search(self, query: str):
         return self.results
+
+    def _get(self, path: str, params=None):
+        return self.payload
 
 
 class FakeMarketClient:
@@ -72,6 +77,34 @@ class FakeValuationsClient:
 
     def get_attribution(self, val_run_id: int):
         return self.attribution
+
+    def list_valuations(self, instrument_uuid: str):
+        return [
+            SimpleNamespace(
+                val_run_id=self.detail.val_run_id,
+                run_uuid=self.detail.run_uuid,
+                as_of_ts=self.detail.as_of_ts,
+                status=self.detail.status,
+                run_label=self.detail.run_label,
+                blended_value=Decimal("150.50"),
+                dcf_value=Decimal("148.20"),
+                relative_value=None,
+                confidence_score=Decimal("72"),
+            )
+        ]
+
+
+class FakeIncidentResolution:
+    def __init__(self, incident_id: int, override_id: int, incident_status: str, resolution_notes: str) -> None:
+        self.incident_id = incident_id
+        self.override_id = override_id
+        self.incident_status = incident_status
+        self.resolution_notes = resolution_notes
+
+
+class FakeQualityClient:
+    def resolve_incident(self, incident_id: int, justification: str, analyst_id: str):
+        return FakeIncidentResolution(incident_id, 9, "RESOLVED", justification)
 
 
 class FakeTicker:
@@ -313,3 +346,71 @@ def test_dq_incidents_avis_offline_returns_none_gracefully() -> None:
     router = DataRouter(avis_enabled=False)
 
     assert router.dq_incidents() is None
+
+
+def test_resolve_incident_returns_override_payload(monkeypatch) -> None:
+    monkeypatch.setenv("AVIS_ANALYST_ID", str(uuid4()))
+    router = DataRouter(avis_enabled=True, quality_client=FakeQualityClient())
+
+    result = router.resolve_incident(7, "This override is justified by confirmed vendor remediation.")
+
+    assert result is not None
+    assert result["incident_id"] == 7
+    assert result["incident_status"] == "RESOLVED"
+
+
+def test_valuation_run_browser_aggregates_runs() -> None:
+    run_uuid = uuid4()
+    instrument_uuid = uuid4()
+    job = ValuationJob(
+        val_run_id=11,
+        run_uuid=run_uuid,
+        status="QUEUED",
+        queued_at=datetime(2026, 7, 27, 10, 0, 0),
+        blended_value=None,
+        dcf_value=None,
+        relative_value=None,
+        confidence_score=None,
+        override_required=None,
+    )
+    detail = ValuationDetail(
+        val_run_id=11,
+        run_uuid=run_uuid,
+        instrument_uuid=instrument_uuid,
+        status="OVERRIDDEN",
+        as_of_ts=datetime(2026, 7, 27, 10, 1, 0),
+        run_type="MANUAL",
+        trigger_type="API",
+        created_at=datetime(2026, 7, 27, 10, 0, 0),
+        completed_at=datetime(2026, 7, 27, 10, 1, 0),
+        run_label="streamlit-client",
+        assumption_set=[],
+        model_outputs=[],
+        attributions=[],
+        confidence_snapshots=[],
+    )
+    instruments = FakeInstrumentsClient()
+    instruments.payload = {
+        "items": [
+            {
+                "instrument_uuid": str(instrument_uuid),
+                "symbol": "ITC.NS",
+                "isin": "INE154A01025",
+                "exchange": "NSE",
+                "company_name": "ITC Ltd",
+            }
+        ],
+        "pagination": {"page": 1, "page_size": 200, "total": 1},
+    }
+    router = DataRouter(
+        avis_enabled=True,
+        instruments_client=instruments,
+        valuations_client=FakeValuationsClient(job=job, detail=detail, attribution=[]),
+    )
+
+    frame = router.valuation_run_browser()
+
+    assert frame is not None
+    assert not frame.empty
+    assert frame.iloc[0]["instrument"] == "ITC.NS"
+    assert bool(frame.iloc[0]["override_required"]) is True
