@@ -37,6 +37,7 @@ from avis.core.valuation_engine import (
     DcfAssumptions,
     DcfEngine,
     DcfProjectionInput,
+    FundamentalsBridge,
     RelativeEngine,
     RelativeInputBundle,
     RelativePeerPoint,
@@ -63,6 +64,8 @@ REVENUE_FACT_CODE = "Revenue"
 RUN_LABEL_KEY = "RUN_LABEL"
 JOB_PAYLOAD_KEY = "JOB_PAYLOAD"
 JOB_FAILURE_KEY = "JOB_FAILURE"
+FUNDAMENTALS_SOURCE_AVIS = "AVIS"
+FUNDAMENTALS_SOURCE_FALLBACK = "FALLBACK"
 METRIC_CODES = {
     "tax_rate": "TAX_RATE",
     "share_count": "SHARE_COUNT",
@@ -344,7 +347,7 @@ def queue_valuation_run_sync(session: Session, payload: RunValuationRequest) -> 
         revenue_cagr=payload.assumption_set.revenue_cagr,
         ebit_margin=payload.assumption_set.ebit_margin,
     )
-    projection_input = _build_dcf_projection_input(
+    projection_input, fundamentals_source = _build_dcf_projection_input(
         session,
         instrument.instrument_id,
         payload,
@@ -382,6 +385,7 @@ def queue_valuation_run_sync(session: Session, payload: RunValuationRequest) -> 
             "relative_inputs": _serialize_relative_input_bundle(relative_inputs),
             "data_quality_score": str(_data_quality_score(session)),
             "assumption_stability": "75.00",
+            "fundamentals_source": fundamentals_source,
         },
     )
     session.flush()
@@ -456,6 +460,20 @@ def process_queued_valuation_run_sync(session: Session, val_run_id: int) -> None
             data_quality_score=data_quality_score,
             assumption_stability=assumption_stability,
         )
+        dcf_output = session.scalar(
+            select(ValModelOutput).where(
+                ValModelOutput.val_run_id == val_run_id,
+                ValModelOutput.model_name == "DCF",
+            )
+        )
+        if dcf_output is not None:
+            output_payload = dict(dcf_output.output_payload or {})
+            output_payload["fundamentals_source"] = queued_payload.get(
+                "fundamentals_source",
+                FUNDAMENTALS_SOURCE_FALLBACK,
+            )
+            dcf_output.output_payload = output_payload
+            session.flush()
         _delete_metadata_key(session, val_run_id, JOB_FAILURE_KEY)
     except Exception as exc:  # pragma: no cover - exercised through API failure status tests if introduced
         logger.exception("queued valuation execution failed val_run_id=%s", val_run_id)
@@ -473,37 +491,70 @@ def _build_dcf_projection_input(
     payload: RunValuationRequest,
     *,
     as_of_date: date,
-) -> DcfProjectionInput:
+) -> tuple[DcfProjectionInput, str]:
     forecast_years = payload.assumption_set.forecast_years
-    revenue_base = _latest_revenue(session, instrument_id, as_of_date=as_of_date)
-    tax_rate = _metric_value(session, instrument_id, METRIC_CODES["tax_rate"], as_of_date=as_of_date)
-    share_count = _metric_value(session, instrument_id, METRIC_CODES["share_count"], as_of_date=as_of_date)
-    net_debt = _metric_value(session, instrument_id, METRIC_CODES["net_debt"], as_of_date=as_of_date)
+    bridge = FundamentalsBridge(session)
+    bridge_input = bridge.build_projection_input(
+        instrument_id=instrument_id,
+        as_of_date=as_of_date,
+        forecast_years=forecast_years,
+        wacc=payload.assumption_set.wacc,
+        revenue_cagr=payload.assumption_set.revenue_cagr,
+        ebit_margin=payload.assumption_set.ebit_margin,
+    )
+    if bridge_input is not None:
+        da_schedule = _schedule_from_request_or_metric(
+            payload.assumption_set.da,
+            fallback=bridge_input.depreciation_and_amortization[0],
+            forecast_years=forecast_years,
+        )
+        capex_schedule = _schedule_from_request_or_metric(
+            payload.assumption_set.capex,
+            fallback=bridge_input.capex[0],
+            forecast_years=forecast_years,
+        )
+        nwc_schedule = _schedule_from_request_or_metric(
+            payload.assumption_set.nwc_delta,
+            fallback=bridge_input.delta_nwc[0],
+            forecast_years=forecast_years,
+        )
+        return (
+            DcfProjectionInput(
+                revenue_base=bridge_input.revenue_base,
+                tax_rate=bridge_input.tax_rate,
+                share_count=bridge_input.share_count,
+                net_debt=bridge_input.net_debt,
+                depreciation_and_amortization=tuple(da_schedule),
+                capex=tuple(capex_schedule),
+                delta_nwc=tuple(nwc_schedule),
+            ),
+            FUNDAMENTALS_SOURCE_AVIS,
+        )
+    return (_placeholder_dcf_projection_input(payload), FUNDAMENTALS_SOURCE_FALLBACK)
+
+
+def _placeholder_dcf_projection_input(payload: RunValuationRequest) -> DcfProjectionInput:
+    forecast_years = payload.assumption_set.forecast_years
     da_schedule = _schedule_from_request_or_metric(
         payload.assumption_set.da,
-        fallback=_metric_value(
-            session,
-            instrument_id,
-            METRIC_CODES["depreciation_and_amortization"],
-            as_of_date=as_of_date,
-        ),
+        fallback=Decimal("40000000"),
         forecast_years=forecast_years,
     )
     capex_schedule = _schedule_from_request_or_metric(
         payload.assumption_set.capex,
-        fallback=_metric_value(session, instrument_id, METRIC_CODES["capex"], as_of_date=as_of_date),
+        fallback=Decimal("55000000"),
         forecast_years=forecast_years,
     )
     nwc_schedule = _schedule_from_request_or_metric(
         payload.assumption_set.nwc_delta,
-        fallback=_metric_value(session, instrument_id, METRIC_CODES["delta_nwc"], as_of_date=as_of_date),
+        fallback=Decimal("0"),
         forecast_years=forecast_years,
     )
     return DcfProjectionInput(
-        revenue_base=revenue_base,
-        tax_rate=tax_rate,
-        share_count=share_count,
-        net_debt=net_debt,
+        revenue_base=Decimal("1000000000"),
+        tax_rate=Decimal("0.25"),
+        share_count=Decimal("100000000"),
+        net_debt=Decimal("200000000"),
         depreciation_and_amortization=tuple(da_schedule),
         capex=tuple(capex_schedule),
         delta_nwc=tuple(nwc_schedule),

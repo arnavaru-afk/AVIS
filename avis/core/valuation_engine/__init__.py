@@ -16,6 +16,7 @@ from avis.core.valuation_engine.dcf import (
     DcfProjectionLine,
     DcfResult,
 )
+from avis.core.valuation_engine.fundamentals_bridge import FundamentalsBridge
 from avis.core.valuation_engine.orchestrator import (
     RelativeInputBundle,
     RelativePeerPoint,
@@ -43,6 +44,7 @@ __all__ = [
     "DcfProjectionInput",
     "DcfProjectionLine",
     "DcfResult",
+    "FundamentalsBridge",
     "ImmutableAssumptionSetError",
     "InsufficientPeerSetError",
     "PeerMetricsProvider",
