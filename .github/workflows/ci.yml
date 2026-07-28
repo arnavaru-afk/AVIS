@@ -1,0 +1,31 @@
+name: CI
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+      - name: Install runtime extras
+        run: pip install alembic psycopg[binary] aiosqlite cryptography
+      - name: Run tests
+        run: pytest -q
+        env:
+          DATABASE_URL: sqlite+pysqlite:///./ci_test.db
+          AVIS_JWT_PUBLIC_KEY: ${{ secrets.AVIS_JWT_PUBLIC_KEY || '' }}
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff
+      - run: ruff check avis/ apps/ etl/ tests/ scripts/
