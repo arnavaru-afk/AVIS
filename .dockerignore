@@ -1,0 +1,9 @@
+.git
+.deps
+.venv
+.pytest_cache
+__pycache__
+*.pyc
+.env.dev
+storage/raw_lake
+postgres_data

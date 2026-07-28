@@ -1,0 +1,46 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: avis
+      POSTGRES_USER: avis
+      POSTGRES_PASSWORD: avis_dev
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U avis"]
+      interval: 5s
+      retries: 10
+      timeout: 5s
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://avis:avis_dev@db:5432/avis
+      AVIS_JWT_PUBLIC_KEY: ${AVIS_JWT_PUBLIC_KEY:-}
+      AVIS_ENV: dev
+      LOG_LEVEL: INFO
+    ports:
+      - "8000:8000"
+
+  terminal:
+    build:
+      context: .
+      dockerfile: Dockerfile.terminal
+    depends_on:
+      - api
+    environment:
+      AVIS_BASE_URL: http://api:8000
+      AVIS_JWT_TOKEN: ${AVIS_JWT_TOKEN:-}
+      AVIS_ENABLED: "true"
+      AVIS_ANALYST_ID: ${AVIS_ANALYST_ID:-9d2b8ea1-3af7-4d10-9c78-19ab4d119001}
+    ports:
+      - "8501:8501"
+
+volumes:
+  postgres_data: {}
