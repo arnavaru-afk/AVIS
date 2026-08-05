@@ -10,9 +10,15 @@ from typing import Any, Callable
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from avis.db.models import FundStatementFact, OpsDataLineage, OpsJobEvent, OpsPipelineRun, RefInstrument
+from avis.db.models import (
+    FundStatementFact,
+    OpsDataLineage,
+    OpsJobEvent,
+    OpsPipelineRun,
+    RefInstrument,
+)
 from etl.fundamentals.metrics import FundamentalsMetricBuilder
-from etl.fundamentals.parser import ParsedStatementFact, TOTAL_REVENUE, YFinanceStatementParser
+from etl.fundamentals.parser import TOTAL_REVENUE, ParsedStatementFact, YFinanceStatementParser
 
 try:
     import yfinance as yf

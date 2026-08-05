@@ -10,7 +10,14 @@ from sqlalchemy.orm import Session
 
 from avis.core.valuation_engine.dcf import DcfProjectionInput
 from avis.db.models import FundStatementFact
-from etl.fundamentals.parser import CAPEX, CASH, DEPRECIATION, SHARES_OUTSTANDING, TOTAL_DEBT, TOTAL_REVENUE
+from etl.fundamentals.parser import (
+    CAPEX,
+    CASH,
+    DEPRECIATION,
+    SHARES_OUTSTANDING,
+    TOTAL_DEBT,
+    TOTAL_REVENUE,
+)
 
 LEGACY_LINE_ITEM_ALIASES: dict[str, tuple[str, ...]] = {
     TOTAL_REVENUE: ("Revenue",),

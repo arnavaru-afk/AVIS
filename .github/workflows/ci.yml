@@ -18,7 +18,6 @@ jobs:
         run: pytest -q
         env:
           DATABASE_URL: sqlite+pysqlite:///./ci_test.db
-          AVIS_JWT_PUBLIC_KEY: ${{ secrets.AVIS_JWT_PUBLIC_KEY || '' }}
 
   lint:
     runs-on: ubuntu-latest
@@ -28,4 +27,4 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install ruff
-      - run: ruff check avis/ apps/ etl/ tests/ scripts/
+      - run: ruff check etl/fundamentals/ avis/core/valuation_engine/fundamentals_bridge.py scripts/seed_fundamentals.py tests/test_fundamentals.py

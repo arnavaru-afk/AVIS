@@ -15,8 +15,8 @@ from sqlalchemy.orm import Session
 from avis.db.models import FundMetricFact, FundStatementFact
 from etl.fundamentals.parser import (
     CAPEX,
-    EBITDA,
     EBIT,
+    EBITDA,
     FREE_CASH_FLOW,
     GROSS_PROFIT,
     NET_INCOME,

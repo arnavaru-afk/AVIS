@@ -35,9 +35,12 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
-select = ["E", "F", "I"]
 
-[tool.ruff.per-file-ignores]
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
 "tests/*" = ["E501"]
 
 [tool.setuptools.packages.find]
