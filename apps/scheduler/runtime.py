@@ -64,14 +64,26 @@ class SchedulerRuntime:
                 ),
             )
 
+        fundamentals_trigger = CronTrigger(hour=20, minute=30, day_of_week="mon-fri", timezone=IST)
         self.scheduler.add_job(
             self.run_fundamentals,
-            trigger=CronTrigger(hour=20, minute=30, day_of_week="mon-fri", timezone=IST),
+            trigger=fundamentals_trigger,
             id="fundamentals_bootstrap",
             replace_existing=True,
             coalesce=True,
             max_instances=1,
             misfire_grace_time=300,
+        )
+        fundamentals_job = self.scheduler.get_job("fundamentals_bootstrap")
+        logger.info(
+            "scheduler_job_registered job=%s cron=%s next_fire_time=%s",
+            "fundamentals_bootstrap",
+            "30 20 * * 1-5",
+            (
+                fundamentals_job.next_run_time
+                if fundamentals_job is not None and hasattr(fundamentals_job, "next_run_time")
+                else fundamentals_trigger.get_next_fire_time(None, datetime.now(IST))
+            ),
         )
 
     def run_ingestion_job(self, job: ScheduledIngestionJob, trade_date: date | None = None) -> None:

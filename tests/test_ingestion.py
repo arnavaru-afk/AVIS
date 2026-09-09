@@ -188,7 +188,7 @@ def test_retry_exhaustion_creates_failed_event_and_dq_incident(tmp_path: Path) -
         assert incident.impact_level == "HIGH"
 
 
-def test_scheduler_registers_and_triggers_policy_job(tmp_path: Path) -> None:
+def test_scheduler_registers_and_triggers_policy_job(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     with _session_with_tables(include_sla=True) as session:
         runtime = SchedulerRuntime(lambda: session, raw_zone_root=tmp_path / "raw")
         runtime.register_daily_jobs()
@@ -197,6 +197,7 @@ def test_scheduler_registers_and_triggers_policy_job(tmp_path: Path) -> None:
             "bse_eod_ingest",
             "fundamentals_bootstrap",
         }
+        assert "scheduler_job_registered job=fundamentals_bootstrap" in caplog.text
 
         called: list[date] = []
 
