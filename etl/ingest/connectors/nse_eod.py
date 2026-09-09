@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Callable
 from urllib.request import urlopen
 
-from etl.ingest.base import BaseConnector, RawWriteResult
+from etl.ingest.base import BaseConnector, RawWriteResult, RetryPolicy
 
 NSE_SERIES_MAP = {
     "EQ": "EQ",
@@ -35,11 +35,15 @@ class NseEodConnector(BaseConnector):
         raw_zone_root: Path,
         contract_path: Path,
         fetcher: Callable[[str], bytes] | None = None,
+        retry_policy: RetryPolicy | None = None,
+        sleep_fn: Callable[[float], None] | None = None,
     ) -> None:
         super().__init__(
             session=session,
             raw_zone_root=raw_zone_root,
             contract_path=contract_path,
+            retry_policy=retry_policy,
+            sleep_fn=sleep_fn,
         )
         self._fetcher = fetcher or self._default_fetcher
 

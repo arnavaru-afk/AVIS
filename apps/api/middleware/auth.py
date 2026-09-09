@@ -22,6 +22,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
         self._settings = settings
 
     async def dispatch(self, request: Request, call_next):
+        if request.url.path in {"/health", "/ready"}:
+            return await call_next(request)
         if not request.url.path.startswith("/api/v1"):
             return await call_next(request)
 

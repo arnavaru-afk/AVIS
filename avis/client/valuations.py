@@ -5,7 +5,14 @@ from __future__ import annotations
 from decimal import Decimal
 
 from avis.client.base import AVISClient
-from avis.client.models import AttributionDetail, AttributionRow, ValuationDetail, ValuationJob, ValuationListResponse, ValuationSummary
+from avis.client.models import (
+    AttributionDetail,
+    AttributionRow,
+    ValuationDetail,
+    ValuationJob,
+    ValuationListResponse,
+    ValuationSummary,
+)
 
 
 class ValuationsClient(AVISClient):

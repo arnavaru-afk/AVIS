@@ -62,8 +62,20 @@ class FundamentalsPipeline:
         self._ticker_factory = ticker_factory or self._default_ticker_factory
         self._now_provider = now_provider or _utc_now
 
-    def run(self, instrument_id: int, symbol: str) -> FundamentalsRunResult:
-        pipeline_run = self._create_pipeline_run(instrument_id=instrument_id, symbol=symbol)
+    def run(
+        self,
+        instrument_id: int,
+        symbol: str,
+        *,
+        run_mode: str = "MANUAL",
+        triggered_by: str = "SYSTEM",
+    ) -> FundamentalsRunResult:
+        pipeline_run = self._create_pipeline_run(
+            instrument_id=instrument_id,
+            symbol=symbol,
+            run_mode=run_mode,
+            triggered_by=triggered_by,
+        )
         source_symbol = symbol
         self._emit_job_event(pipeline_run.pipeline_run_id, event_type="START", message=f"bootstrap_start instrument_id={instrument_id}")
         try:
@@ -217,12 +229,19 @@ class FundamentalsPipeline:
         self._session.flush()
         return stored
 
-    def _create_pipeline_run(self, *, instrument_id: int, symbol: str) -> OpsPipelineRun:
+    def _create_pipeline_run(
+        self,
+        *,
+        instrument_id: int,
+        symbol: str,
+        run_mode: str,
+        triggered_by: str,
+    ) -> OpsPipelineRun:
         run = OpsPipelineRun(
             run_uuid=uuid.uuid4(),
             pipeline_name=self.pipeline_name,
-            run_mode="MANUAL",
-            triggered_by="SYSTEM",
+            run_mode=run_mode,
+            triggered_by=triggered_by,
             status="RUNNING",
             started_at=self._now_provider(),
             ended_at=None,

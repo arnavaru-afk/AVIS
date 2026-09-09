@@ -12,7 +12,11 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from avis.core.valuation_engine.assumptions import AssumptionSetManager, DcfAssumptions
-from avis.core.valuation_engine.confidence import ConfidenceInput, ConfidenceScoreResult, ConfidenceScoringEngine
+from avis.core.valuation_engine.confidence import (
+    ConfidenceInput,
+    ConfidenceScoreResult,
+    ConfidenceScoringEngine,
+)
 from avis.core.valuation_engine.dcf import DcfEngine, DcfProjectionInput, DcfResult
 from avis.core.valuation_engine.relative import (
     InsufficientPeerSetError,

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import Select, func, select
 from sqlalchemy.orm import selectinload
 

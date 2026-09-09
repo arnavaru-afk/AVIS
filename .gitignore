@@ -1,5 +1,7 @@
 .deps/
 .venv/
+.venv-ci/
+avis.egg-info/
 .pytest_cache/
 __pycache__/
 *.pyc

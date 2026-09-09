@@ -14,7 +14,13 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 from sqlalchemy import Select, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from apps.api.dependencies import CurrentUser, DateWindow, DbSession, PaginationParams, WriteAuthorizedUser
+from apps.api.dependencies import (
+    CurrentUser,
+    DateWindow,
+    DbSession,
+    PaginationParams,
+    WriteAuthorizedUser,
+)
 from apps.api.schemas.instruments import PaginationMeta
 from apps.api.schemas.valuations import (
     AssumptionEntryResponse,

@@ -1,5 +1,5 @@
-from avis.db.base import Base
 import avis.db.models as m
+from avis.db.base import Base
 
 
 def test_expected_tables_present() -> None:

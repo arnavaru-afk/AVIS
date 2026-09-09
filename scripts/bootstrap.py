@@ -2,20 +2,29 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-import os
-from uuid import UUID, uuid5, NAMESPACE_DNS
+from uuid import NAMESPACE_DNS, uuid5
 
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from avis.db.models import AuthRole, AuthUser, AuthUserRole, RefCompany, RefExchange, RefInstrument, RefSymbolAlias
+from avis.db.models import (
+    AuthRole,
+    AuthUser,
+    AuthUserRole,
+    RefCompany,
+    RefExchange,
+    RefInstrument,
+    RefSymbolAlias,
+)
 from scripts.dev_token import DEV_ANALYST_EMAIL, DEV_ANALYST_UUID
 
 CANONICAL_LISTING_DATE = date(2000, 1, 1)
-NOW = lambda: datetime.now(UTC).replace(tzinfo=None)
+def NOW():
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 @dataclass(frozen=True, slots=True)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,9 +13,16 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ.setdefault("AVIS_BASE_URL", "http://avis.test")
 
-from avis.client import EntityNotFoundError
-from avis.client.models import AttributionRow, ConfidenceSnapshot, InstrumentResult, ModelOutput, ValuationDetail, ValuationJob
 from apps.terminal.data_router import DataRouter
+from avis.client import EntityNotFoundError
+from avis.client.models import (
+    AttributionRow,
+    ConfidenceSnapshot,
+    InstrumentResult,
+    ModelOutput,
+    ValuationDetail,
+    ValuationJob,
+)
 
 
 class MockResponse:

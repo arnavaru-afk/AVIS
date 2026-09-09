@@ -27,13 +27,36 @@ services:
       LOG_LEVEL: INFO
     ports:
       - "8000:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/ready')\""]
+      interval: 10s
+      retries: 12
+      timeout: 5s
+      start_period: 15s
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    depends_on:
+      db:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://avis:avis_dev@db:5432/avis
+      AVIS_JWT_PUBLIC_KEY: ${AVIS_JWT_PUBLIC_KEY:-}
+      AVIS_ENV: dev
+      LOG_LEVEL: INFO
+    entrypoint: ["python", "-m", "apps.scheduler.worker"]
 
   terminal:
     build:
       context: .
       dockerfile: Dockerfile.terminal
     depends_on:
-      - api
+      api:
+        condition: service_healthy
     environment:
       AVIS_BASE_URL: http://api:8000
       AVIS_JWT_TOKEN: ${AVIS_JWT_TOKEN:-}

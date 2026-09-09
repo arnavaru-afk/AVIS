@@ -11,7 +11,6 @@ from starlette.requests import Request
 
 from avis.core.quality_engine import CompliancePolicyEngine, CompliancePolicyError, SourcePolicy
 
-
 DEFAULT_SOURCE_POLICIES = (
     SourcePolicy(
         source_name="NSE_EOD",

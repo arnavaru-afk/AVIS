@@ -6,10 +6,9 @@ from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import Annotated
-from uuid import UUID
 
 from fastapi import Depends, HTTPException, Query, Request, status
-from sqlalchemy import Select, and_, or_, select
+from sqlalchemy import Select, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from apps.api.config import Settings

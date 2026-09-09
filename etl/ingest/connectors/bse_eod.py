@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Callable, Mapping
 from urllib.request import urlopen
 
-from etl.ingest.base import BaseConnector, RawWriteResult
+from etl.ingest.base import BaseConnector, RawWriteResult, RetryPolicy
 
 BSE_SERIES_MAP = {
     "A": "EQ",
@@ -37,11 +37,15 @@ class BseEodConnector(BaseConnector):
         contract_path: Path,
         scrip_code_to_isin: Mapping[str, str],
         fetcher: Callable[[str], bytes] | None = None,
+        retry_policy: RetryPolicy | None = None,
+        sleep_fn: Callable[[float], None] | None = None,
     ) -> None:
         super().__init__(
             session=session,
             raw_zone_root=raw_zone_root,
             contract_path=contract_path,
+            retry_policy=retry_policy,
+            sleep_fn=sleep_fn,
         )
         self._scrip_code_to_isin = {
             key.strip(): value.strip().upper()

@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from dataclasses import asdict, is_dataclass
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -23,7 +22,6 @@ from avis.db.models import (
     MarketOhlcv1D,
     OpsDataLineage,
     OpsJobEvent,
-    OpsPipelineRun,
 )
 
 Severity = str

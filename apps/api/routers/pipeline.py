@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Query
-from sqlalchemy import Select, exists, select
+from sqlalchemy import Select, select
 from sqlalchemy.orm import selectinload
 
 from apps.api.dependencies import CurrentUser, DbSession
-from apps.api.schemas.pipeline import JobEventResponse, PipelineRunDetailResponse, PipelineRunListItem, PipelineRunListResponse
-from avis.db.models import OpsPipelineRun, OpsSlaBreach
+from apps.api.schemas.pipeline import (
+    JobEventResponse,
+    PipelineRunDetailResponse,
+    PipelineRunListItem,
+    PipelineRunListResponse,
+)
+from avis.db.models import OpsPipelineRun
 
 router = APIRouter(prefix="/pipeline", tags=["pipeline"])
 

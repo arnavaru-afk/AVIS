@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 from datetime import date
+
 import pandas as pd
 import requests
 
 from avis.client.base import AVISClient
-from avis.client.models import InstrumentDetail, InstrumentResult, InstrumentListResponse, PriceHistory, PriceHistoryRow
+from avis.client.models import (
+    InstrumentDetail,
+    InstrumentListResponse,
+    InstrumentResult,
+    PriceHistory,
+    PriceHistoryRow,
+)
 
 
 class InstrumentsClient(AVISClient):

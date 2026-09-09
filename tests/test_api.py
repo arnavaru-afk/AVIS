@@ -209,6 +209,11 @@ def test_instruments_router_isolation_lists_instruments() -> None:
     assert response.json()["items"][0]["symbol"] == "ITC"
 
 
+def test_health_and_ready_are_public(api_env) -> None:
+    assert api_env["client"].get("/health").json() == {"status": "ok"}
+    assert api_env["client"].get("/ready").json() == {"status": "ok"}
+
+
 def test_market_router_isolation_returns_rows() -> None:
     app = FastAPI()
     app.include_router(market.router, prefix="/api/v1")

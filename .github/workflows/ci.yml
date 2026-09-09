@@ -27,4 +27,4 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install ruff
-      - run: ruff check etl/fundamentals/ avis/core/valuation_engine/fundamentals_bridge.py scripts/seed_fundamentals.py tests/test_fundamentals.py
+      - run: ruff check .

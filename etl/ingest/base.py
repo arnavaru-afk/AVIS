@@ -6,11 +6,13 @@ import abc
 import base64
 import hashlib
 import json
+import time as time_module
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
+from urllib.error import HTTPError, URLError
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -30,6 +32,17 @@ class RawWriteResult:
     manifest_path: Path
     created: bool
     updated: bool
+    pipeline_run_id: int | None = None
+    confirmed_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RetryPolicy:
+    """Bounded exponential backoff for transient connector failures."""
+
+    max_attempts: int = 3
+    initial_delay_seconds: float = 5.0
+    max_delay_seconds: float = 300.0
 
 
 class BaseConnector(abc.ABC):
@@ -45,10 +58,15 @@ class BaseConnector(abc.ABC):
         session: Session,
         raw_zone_root: Path,
         contract_path: Path,
+        retry_policy: RetryPolicy | None = None,
+        sleep_fn: Callable[[float], None] | None = None,
     ) -> None:
         self._session = session
         self._raw_zone_root = raw_zone_root
         self._contract_path = contract_path
+        self._retry_policy = retry_policy or RetryPolicy()
+        self._sleep_fn = sleep_fn or time_module.sleep
+        self.last_pipeline_run_id: int | None = None
 
     @abc.abstractmethod
     def fetch(self, trade_date: date) -> bytes:
@@ -76,48 +94,93 @@ class BaseConnector(abc.ABC):
         """Execute fetch, contract enforcement, and raw write for a connector."""
 
         pipeline_run = self._create_pipeline_run(trade_date)
+        self.last_pipeline_run_id = pipeline_run.pipeline_run_id
         self._emit_job_event(
             pipeline_run.pipeline_run_id,
             event_type="START",
             message=f"Connector {self.source_system} started",
         )
-        try:
-            payload = self.fetch(trade_date)
-            rows = self.validate(payload, trade_date)
-            contract = load_contract(self._contract_path)
-            valid_rows, rejected = validate_rows(rows, contract)
-            self._quarantine_contract_violations(
-                rejected,
-                pipeline_run.pipeline_run_id,
-                target_table=f"raw_zone:{self.source_system}",
-            )
-            result = self.write_raw(
-                valid_rows,
-                payload,
-                trade_date,
-                pipeline_run.pipeline_run_id,
-            )
-            self._emit_job_event(
-                pipeline_run.pipeline_run_id,
-                event_type="END",
-                message=f"raw_write_confirmed path={result.manifest_path}",
-                metrics_payload={
-                    "row_count": result.row_count,
-                    "checksum": result.checksum,
-                    "created": result.created,
-                    "updated": result.updated,
-                },
-            )
-            self._finish_pipeline_run(pipeline_run, "SUCCESS")
-            return result
-        except Exception as exc:
-            self._emit_job_event(
-                pipeline_run.pipeline_run_id,
-                event_type="ERROR",
-                message=f"run_failed: {exc}",
-            )
-            self._finish_pipeline_run(pipeline_run, "FAILED")
-            raise
+        attempt = 1
+        while True:
+            try:
+                payload = self.fetch(trade_date)
+                rows = self.validate(payload, trade_date)
+                contract = load_contract(self._contract_path)
+                valid_rows, rejected = validate_rows(rows, contract)
+                self._quarantine_contract_violations(
+                    rejected,
+                    pipeline_run.pipeline_run_id,
+                    target_table=f"raw_zone:{self.source_system}",
+                )
+                result = self.write_raw(
+                    valid_rows,
+                    payload,
+                    trade_date,
+                    pipeline_run.pipeline_run_id,
+                )
+                result = RawWriteResult(
+                    source_system=result.source_system,
+                    trade_date=result.trade_date,
+                    checksum=result.checksum,
+                    row_count=result.row_count,
+                    manifest_path=result.manifest_path,
+                    created=result.created,
+                    updated=result.updated,
+                    pipeline_run_id=pipeline_run.pipeline_run_id,
+                    confirmed_at=self._now(),
+                )
+                self._emit_job_event(
+                    pipeline_run.pipeline_run_id,
+                    event_type="END",
+                    message=f"raw_write_confirmed path={result.manifest_path}",
+                    metrics_payload={
+                        "attempt": attempt,
+                        "row_count": result.row_count,
+                        "checksum": result.checksum,
+                        "created": result.created,
+                        "updated": result.updated,
+                    },
+                )
+                self._finish_pipeline_run(pipeline_run, "SUCCESS")
+                return result
+            except Exception as exc:
+                retryable = self._is_retryable_exception(exc)
+                can_retry = retryable and attempt < self._retry_policy.max_attempts
+                if can_retry:
+                    delay_seconds = self._retry_delay_seconds(attempt)
+                    self._emit_job_event(
+                        pipeline_run.pipeline_run_id,
+                        event_type="RETRY",
+                        message=f"retrying_after_failure: {exc}",
+                        metrics_payload={
+                            "attempt": attempt,
+                            "max_attempts": self._retry_policy.max_attempts,
+                            "delay_seconds": delay_seconds,
+                        },
+                    )
+                    self._sleep_fn(delay_seconds)
+                    attempt += 1
+                    continue
+
+                self._emit_job_event(
+                    pipeline_run.pipeline_run_id,
+                    event_type="FAILED",
+                    message=f"run_failed: {exc}",
+                    metrics_payload={
+                        "attempt": attempt,
+                        "max_attempts": self._retry_policy.max_attempts,
+                        "retryable": retryable,
+                    },
+                )
+                if retryable:
+                    self._record_retry_exhaustion_incident(
+                        pipeline_run_id=pipeline_run.pipeline_run_id,
+                        trade_date=trade_date,
+                        attempt=attempt,
+                        failure_reason=str(exc),
+                    )
+                self._finish_pipeline_run(pipeline_run, "FAILED")
+                raise
 
     def _write_raw_payload(
         self,
@@ -191,6 +254,7 @@ class BaseConnector(abc.ABC):
             manifest_path=manifest_path,
             created=created,
             updated=True,
+            confirmed_at=self._now(),
         )
 
     def compute_checksum(self, payload: bytes) -> str:
@@ -307,6 +371,55 @@ class BaseConnector(abc.ABC):
         self._session.flush()
         return rule
 
+    def _record_retry_exhaustion_incident(
+        self,
+        *,
+        pipeline_run_id: int,
+        trade_date: date,
+        attempt: int,
+        failure_reason: str,
+    ) -> None:
+        rule = self._ensure_dq_rule(
+            rule_code="CONNECTOR_RETRY_EXHAUSTED",
+            rule_name="Connector retries exhausted",
+        )
+        dq_result = DqResult(
+            dq_rule_id=rule.dq_rule_id,
+            pipeline_run_id=pipeline_run_id,
+            target_table=f"raw_zone:{self.source_system}",
+            target_record_key=trade_date.isoformat(),
+            status="FAIL",
+            failure_reason=failure_reason,
+            measured_value=json.dumps(
+                {
+                    "attempt": attempt,
+                    "source_system": self.source_system,
+                },
+                sort_keys=True,
+            ),
+            threshold_value=json.dumps(
+                {"max_attempts": self._retry_policy.max_attempts},
+                sort_keys=True,
+            ),
+            evaluated_at=self._now(),
+        )
+        self._assign_pk_if_sqlite(dq_result, "dq_result_id", DqResult)
+        self._session.add(dq_result)
+        self._session.flush()
+
+        dq_incident = DqIncident(
+            dq_result_id=dq_result.dq_result_id,
+            incident_status="OPEN",
+            impact_level="HIGH",
+            assigned_to="DATA_ENGINEERING",
+            opened_at=self._now(),
+            resolved_at=None,
+            resolution_notes=f"retry_exhausted source={self.source_system} reason={failure_reason}",
+        )
+        self._assign_pk_if_sqlite(dq_incident, "dq_incident_id", DqIncident)
+        self._session.add(dq_incident)
+        self._session.flush()
+
     def _assign_pk_if_sqlite(self, instance: Any, pk_name: str, model: type[Any]) -> None:
         bind = self._session.get_bind()
         if bind is None or bind.dialect.name != "sqlite":
@@ -332,3 +445,13 @@ class BaseConnector(abc.ABC):
     @staticmethod
     def _now() -> datetime:
         return datetime.now(timezone.utc)
+
+    def _retry_delay_seconds(self, attempt: int) -> float:
+        delay = self._retry_policy.initial_delay_seconds * (2 ** max(attempt - 1, 0))
+        return min(delay, self._retry_policy.max_delay_seconds)
+
+    @staticmethod
+    def _is_retryable_exception(exc: Exception) -> bool:
+        if isinstance(exc, HTTPError):
+            return exc.code == 429 or 500 <= exc.code < 600
+        return isinstance(exc, (TimeoutError, ConnectionError, URLError))

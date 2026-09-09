@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 from avis.client.base import AVISClient
-from avis.client.models import IncidentDetail, IncidentListResponse, IncidentResolution, IncidentSummary
+from avis.client.models import (
+    IncidentDetail,
+    IncidentListResponse,
+    IncidentResolution,
+    IncidentSummary,
+)
 
 
 class QualityClient(AVISClient):

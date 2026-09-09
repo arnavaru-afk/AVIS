@@ -9,7 +9,13 @@ from fastapi import APIRouter, Query, Request
 from sqlalchemy import Select, func, select
 from sqlalchemy.orm import selectinload
 
-from apps.api.dependencies import CurrentUser, DateWindow, DbSession, PaginationParams, register_compliance_check
+from apps.api.dependencies import (
+    CurrentUser,
+    DateWindow,
+    DbSession,
+    PaginationParams,
+    register_compliance_check,
+)
 from apps.api.routers.market import _fetch_price_rows, _load_instrument
 from apps.api.schemas.instruments import (
     InstrumentDetailResponse,

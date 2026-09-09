@@ -57,6 +57,7 @@ class IngestionSchedulerPolicy:
         job: ScheduledIngestionJob,
         trade_date: date,
         raw_write_confirmed_at: datetime | None,
+        pipeline_run_id: int | None = None,
     ) -> OpsSlaBreach | None:
         """Emit an SLA breach when the raw write missed the expected deadline."""
 
@@ -66,24 +67,37 @@ class IngestionSchedulerPolicy:
             if confirmed_ist <= deadline:
                 return None
 
-        pipeline_run = OpsPipelineRun(
-            run_uuid=uuid.uuid4(),
-            pipeline_name=job.pipeline_name,
-            run_mode="SCHEDULED",
-            triggered_by="SCHEDULER",
-            status="FAILED",
-            started_at=datetime.now(timezone.utc),
-            ended_at=datetime.now(timezone.utc),
-            run_context={"trade_date": trade_date.isoformat(), "source_system": job.source_system},
+        pipeline_run = None
+        if pipeline_run_id is not None:
+            pipeline_run = self._session.get(OpsPipelineRun, pipeline_run_id)
+        if pipeline_run is None:
+            pipeline_run = OpsPipelineRun(
+                run_uuid=uuid.uuid4(),
+                pipeline_name=job.pipeline_name,
+                run_mode="SCHEDULED",
+                triggered_by="SCHEDULER",
+                status="FAILED",
+                started_at=datetime.now(timezone.utc),
+                ended_at=datetime.now(timezone.utc),
+                run_context={"trade_date": trade_date.isoformat(), "source_system": job.source_system},
+            )
+            self._assign_pk_if_sqlite(pipeline_run, "pipeline_run_id", OpsPipelineRun)
+            self._session.add(pipeline_run)
+            self._session.flush()
+
+        existing = self._session.scalar(
+            select(OpsSlaBreach).where(
+                OpsSlaBreach.pipeline_run_id == pipeline_run.pipeline_run_id,
+                OpsSlaBreach.sla_type == "RAW_WRITE_BY_20_00_IST",
+            )
         )
-        self._assign_pk_if_sqlite(pipeline_run, "pipeline_run_id", OpsPipelineRun)
-        self._session.add(pipeline_run)
-        self._session.flush()
+        if existing is not None:
+            return existing
 
         event = OpsJobEvent(
             pipeline_run_id=pipeline_run.pipeline_run_id,
             job_name=f"{job.pipeline_name}_sla",
-            event_type="ERROR",
+            event_type="WARN",
             event_ts=datetime.now(timezone.utc),
             message=f"SLA breach for {job.source_system} on {trade_date.isoformat()}",
             metrics_payload={"deadline_ist": deadline.isoformat()},

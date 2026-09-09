@@ -7,7 +7,7 @@ from datetime import date
 import pandas as pd
 
 from avis.client.base import AVISClient
-from avis.client.models import PriceHistory, PriceHistoryRow
+from avis.client.models import PriceHistory
 
 
 class MarketClient(AVISClient):

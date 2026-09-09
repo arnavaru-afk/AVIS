@@ -870,7 +870,10 @@ class OpsJobEvent(Base):
     __table_args__ = (
         Index("ix_ops_job_event_run", "pipeline_run_id"),
         Index("ix_ops_job_event_type_ts", "event_type", "event_ts"),
-        CheckConstraint("event_type IN ('START','END','WARN','ERROR','RETRY')", name="ops_job_event_type_allowed"),
+        CheckConstraint(
+            "event_type IN ('START','END','WARN','ERROR','RETRY','FAILED')",
+            name="ops_job_event_type_allowed",
+        ),
     )
 
 

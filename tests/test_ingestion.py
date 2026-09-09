@@ -7,13 +7,15 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
 from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import Session
 
+from apps.scheduler.ingestion import IngestionSchedulerPolicy
+from apps.scheduler.runtime import SchedulerRuntime
 from avis.db.base import Base
 from avis.db.models import DqIncident, DqResult, DqRule, OpsJobEvent, OpsPipelineRun, OpsSlaBreach
-from apps.scheduler.ingestion import IngestionSchedulerPolicy
-from etl.ingest.base import BaseConnector, RawWriteResult
+from etl.ingest.base import BaseConnector, RawWriteResult, RetryPolicy
 from etl.ingest.connectors.bse_eod import BseEodConnector
 from etl.ingest.connectors.nse_eod import NseEodConnector
 
@@ -68,6 +70,18 @@ class _ContractDriftConnector(BaseConnector):
             trade_date=trade_date,
             source_system=self.source_system,
         )
+
+
+class _TransientFailureConnector(_ContractDriftConnector):
+    source_system = "TRANSIENT_EOD"
+
+    def __init__(self, *, session: Session, raw_zone_root: Path, contract_path: Path) -> None:
+        super().__init__(session=session, raw_zone_root=raw_zone_root, contract_path=contract_path)
+        self._retry_policy = RetryPolicy(max_attempts=2, initial_delay_seconds=0)
+        self._sleep_fn = lambda _delay: None
+
+    def fetch(self, trade_date: date) -> bytes:
+        raise TimeoutError("source unavailable")
 
 
 def test_nse_validation_checksum_and_idempotency(tmp_path: Path) -> None:
@@ -154,6 +168,57 @@ def test_end_to_end_fetch_raw_write_and_job_events(tmp_path: Path) -> None:
         )
         assert breach is not None
         assert session.scalar(select(OpsSlaBreach.sla_breach_id)) is not None
+
+
+def test_retry_exhaustion_creates_failed_event_and_dq_incident(tmp_path: Path) -> None:
+    with _session_with_tables() as session:
+        connector = _TransientFailureConnector(
+            session=session,
+            raw_zone_root=tmp_path / "raw",
+            contract_path=Path("data/contracts/nse_eod.json"),
+        )
+
+        with pytest.raises(TimeoutError):
+            connector.run(date(2026, 6, 26))
+
+        events = list(session.scalars(select(OpsJobEvent).order_by(OpsJobEvent.job_event_id)))
+        assert [event.event_type for event in events] == ["START", "RETRY", "FAILED"]
+        incident = session.scalar(select(DqIncident))
+        assert incident is not None
+        assert incident.impact_level == "HIGH"
+
+
+def test_scheduler_registers_and_triggers_policy_job(tmp_path: Path) -> None:
+    with _session_with_tables(include_sla=True) as session:
+        runtime = SchedulerRuntime(lambda: session, raw_zone_root=tmp_path / "raw")
+        runtime.register_daily_jobs()
+        assert {job.id for job in runtime.scheduler.get_jobs()} >= {
+            "nse_eod_ingest",
+            "bse_eod_ingest",
+            "fundamentals_bootstrap",
+        }
+
+        called: list[date] = []
+
+        class FakeConnector:
+            last_pipeline_run_id = None
+
+            def run(self, trade_date: date) -> RawWriteResult:
+                called.append(trade_date)
+                return RawWriteResult(
+                    source_system="NSE_EOD",
+                    trade_date=trade_date,
+                    checksum="checksum",
+                    row_count=0,
+                    manifest_path=tmp_path / "manifest.json",
+                    created=True,
+                    updated=True,
+                    confirmed_at=datetime(2026, 6, 26, 19, 0, tzinfo=timezone.utc),
+                )
+
+        runtime._build_connector = lambda _session, _job: FakeConnector()  # type: ignore[method-assign]
+        runtime.run_ingestion_job(IngestionSchedulerPolicy.daily_jobs()[0], date(2026, 6, 26))
+        assert called == [date(2026, 6, 26)]
 
 
 def _session_with_tables(*, include_sla: bool = False):

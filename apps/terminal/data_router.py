@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
-from datetime import UTC, date, datetime, timedelta
-from decimal import Decimal
 import os
 import re
 import time
+from dataclasses import asdict
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from typing import Any, Callable
 from urllib.parse import quote_plus
 from xml.etree import ElementTree
@@ -25,7 +25,14 @@ from avis.client import (
     ValuationsClient,
 )
 from avis.client.config import ClientConfig
-from avis.client.models import AttributionRow, ConfidenceSnapshot, IncidentSummary, PipelineRun, ValuationDetail, ValuationJob
+from avis.client.models import (
+    AttributionRow,
+    ConfidenceSnapshot,
+    IncidentSummary,
+    PipelineRun,
+    ValuationDetail,
+    ValuationJob,
+)
 
 try:
     import yfinance as yf
@@ -233,7 +240,6 @@ class DataRouter:
             market_cap = self._numeric(info.get("marketCap"))
             enterprise_value = self._numeric(info.get("enterpriseValue"))
             ebitda = self._numeric(info.get("ebitda"))
-            earnings = self._numeric(info.get("netIncomeToCommon"))
             book_value = self._numeric(info.get("bookValue"))
             sales = self._numeric(info.get("totalRevenue"))
             price = self._numeric(info.get("currentPrice") or info.get("regularMarketPrice"))

@@ -7,6 +7,9 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, FastAPI
+from fastapi.responses import JSONResponse
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from apps.api.config import Settings, get_settings
@@ -46,6 +49,23 @@ def create_app(*, settings: Settings | None = None) -> FastAPI:
     app.add_middleware(RequestLoggingMiddleware)
     app.add_middleware(ComplianceMiddleware)
     app.add_middleware(AuthMiddleware, settings=resolved_settings)
+
+    @app.get("/health", include_in_schema=False)
+    async def health() -> dict[str, str]:
+        """Liveness endpoint: the API process is accepting requests."""
+
+        return {"status": "ok"}
+
+    @app.get("/ready", include_in_schema=False)
+    async def ready():
+        """Readiness endpoint: the configured database accepts a query."""
+
+        try:
+            async with app.state.session_factory() as session:
+                await session.execute(text("SELECT 1"))
+        except (AttributeError, SQLAlchemyError):
+            return JSONResponse(status_code=503, content={"status": "not_ready"})
+        return {"status": "ok"}
 
     api_router = APIRouter(prefix="/api/v1")
     api_router.include_router(instruments.router)
