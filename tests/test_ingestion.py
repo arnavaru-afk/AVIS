@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import zipfile
 from datetime import date, datetime, timezone
 from decimal import Decimal
@@ -190,6 +191,7 @@ def test_retry_exhaustion_creates_failed_event_and_dq_incident(tmp_path: Path) -
 
 def test_scheduler_registers_and_triggers_policy_job(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     with _session_with_tables(include_sla=True) as session:
+        caplog.set_level(logging.INFO, logger="apps.scheduler.runtime")
         runtime = SchedulerRuntime(lambda: session, raw_zone_root=tmp_path / "raw")
         runtime.register_daily_jobs()
         assert {job.id for job in runtime.scheduler.get_jobs()} >= {
